@@ -1,4 +1,4 @@
-#include "StarRenderer_opengl20.hpp"
+#include "StarRenderer_opengl41.hpp"
 #include "StarJsonExtra.hpp"
 #include "StarCasting.hpp"
 #include "StarLogging.hpp"
@@ -69,12 +69,12 @@ void main() {
 }
 )SHADER";
 
-OpenGl20Renderer::OpenGl20Renderer() {
+OpenGl41Renderer::OpenGl41Renderer() {
   if (glewInit() != GLEW_OK)
     throw RendererException("Could not initialize GLEW");
 
-  if (!GLEW_VERSION_2_0)
-    throw RendererException("OpenGL 2.0 not available!");
+  if (!GLEW_VERSION_4_1)
+    throw RendererException("OpenGL 4.1 not available!");
 
   Logger::info("OpenGL version: '{}' vendor: '{}' renderer: '{}' shader: '{}'",
       (const char*)glGetString(GL_VERSION),
@@ -83,7 +83,6 @@ OpenGl20Renderer::OpenGl20Renderer() {
       (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));
 
   glClearColor(0.0, 0.0, 0.0, 1.0);
-  glEnable(GL_TEXTURE_2D);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDisable(GL_DEPTH_TEST);
@@ -101,7 +100,7 @@ OpenGl20Renderer::OpenGl20Renderer() {
   logGlErrorSummary("OpenGL errors during renderer initialization");
 }
 
-OpenGl20Renderer::~OpenGl20Renderer() {
+OpenGl41Renderer::~OpenGl41Renderer() {
   for (auto& effect : m_effects)
     glDeleteProgram(effect.second.program);
 
@@ -109,15 +108,15 @@ OpenGl20Renderer::~OpenGl20Renderer() {
   logGlErrorSummary("OpenGL errors during shutdown");
 }
 
-String OpenGl20Renderer::rendererId() const {
-  return "OpenGL20";
+String OpenGl41Renderer::rendererId() const {
+  return "OpenGL41";
 }
 
-Vec2U OpenGl20Renderer::screenSize() const {
+Vec2U OpenGl41Renderer::screenSize() const {
   return m_screenSize;
 }
 
-OpenGl20Renderer::GlFrameBuffer::GlFrameBuffer(Json const& fbConfig) : config(fbConfig) {
+OpenGl41Renderer::GlFrameBuffer::GlFrameBuffer(Json const& fbConfig) : config(fbConfig) {
   texture = createGlTexture(Image(), TextureAddressing::Clamp, TextureFiltering::Nearest);
   glBindTexture(GL_TEXTURE_2D, texture->glTextureId());
 
@@ -137,19 +136,19 @@ OpenGl20Renderer::GlFrameBuffer::GlFrameBuffer(Json const& fbConfig) : config(fb
 }
 
 
-OpenGl20Renderer::GlFrameBuffer::~GlFrameBuffer() {
+OpenGl41Renderer::GlFrameBuffer::~GlFrameBuffer() {
   glDeleteFramebuffers(1, &id);
   texture.reset();
 }
 
-void OpenGl20Renderer::loadConfig(Json const& config) {
+void OpenGl41Renderer::loadConfig(Json const& config) {
   m_frameBuffers.clear();
 
   for (auto& pair : config.getObject("frameBuffers", {}))
     m_frameBuffers[pair.first] = make_ref<GlFrameBuffer>(pair.second);
 }
 
-void OpenGl20Renderer::loadEffectConfig(String const& name, Json const& effectConfig, StringMap<String> const& shaders) {
+void OpenGl41Renderer::loadEffectConfig(String const& name, Json const& effectConfig, StringMap<String> const& shaders) {
   if (m_effects.contains(name)) {
     Logger::warn("OpenGL effect {} already exists", name);
     switchEffectConfig(name);
@@ -213,7 +212,7 @@ void OpenGl20Renderer::loadEffectConfig(String const& name, Json const& effectCo
 
     effectParameter.parameterUniform = glGetUniformLocation(m_program, p.second.getString("uniform").utf8Ptr());
     if (effectParameter.parameterUniform == -1) {
-      Logger::warn("OpenGL20 effect parameter '{}' has no associated uniform, skipping", p.first);
+      Logger::warn("OpenGl41 effect parameter '{}' has no associated uniform, skipping", p.first);
     } else {
       String type = p.second.getString("type");
       if (type == "bool") {
@@ -261,7 +260,7 @@ void OpenGl20Renderer::loadEffectConfig(String const& name, Json const& effectCo
     EffectTexture effectTexture;
     effectTexture.textureUniform = glGetUniformLocation(m_program, p.second.getString("textureUniform").utf8Ptr());
     if (effectTexture.textureUniform == -1) {
-      Logger::warn("OpenGL20 effect parameter '{}' has no associated uniform, skipping", p.first);
+      Logger::warn("OpenGl41 effect parameter '{}' has no associated uniform, skipping", p.first);
     } else {
         effectTexture.textureUnit = parameterTextureUnit++;
         glUniform1i(effectTexture.textureUniform, effectTexture.textureUnit);
@@ -271,7 +270,7 @@ void OpenGl20Renderer::loadEffectConfig(String const& name, Json const& effectCo
         if (auto tsu = p.second.optString("textureSizeUniform")) {
           effectTexture.textureSizeUniform = glGetUniformLocation(m_program, tsu->utf8Ptr());
           if (effectTexture.textureSizeUniform == -1)
-            Logger::warn("OpenGL20 effect parameter '{}' has textureSizeUniform '{}' with no associated uniform", p.first, *tsu);
+            Logger::warn("OpenGl41 effect parameter '{}' has textureSizeUniform '{}' with no associated uniform", p.first, *tsu);
         }
 
       effect.textures[p.first] = effectTexture;
@@ -282,13 +281,13 @@ void OpenGl20Renderer::loadEffectConfig(String const& name, Json const& effectCo
     logGlErrorSummary("OpenGL errors setting effect config");
 }
 
-void OpenGl20Renderer::setEffectParameter(String const& parameterName, RenderEffectParameter const& value) {
+void OpenGl41Renderer::setEffectParameter(String const& parameterName, RenderEffectParameter const& value) {
   auto ptr = m_currentEffect->parameters.ptr(parameterName);
   if (!ptr || (ptr->parameterValue && *ptr->parameterValue == value))
     return;
 
   if (ptr->parameterType != value.typeIndex())
-    throw RendererException::format("OpenGL20Renderer::setEffectParameter '{}' parameter type mismatch", parameterName);
+    throw RendererException::format("OpenGL41Renderer::setEffectParameter '{}' parameter type mismatch", parameterName);
 
   flushImmediatePrimitives();
 
@@ -308,7 +307,7 @@ void OpenGl20Renderer::setEffectParameter(String const& parameterName, RenderEff
   ptr->parameterValue = value;
 }
 
-void OpenGl20Renderer::setEffectTexture(String const& textureName, Image const& image) {
+void OpenGl41Renderer::setEffectTexture(String const& textureName, Image const& image) {
   auto ptr = m_currentEffect->textures.ptr(textureName);
   if (!ptr)
     return;
@@ -329,7 +328,7 @@ void OpenGl20Renderer::setEffectTexture(String const& textureName, Image const& 
   }
 }
 
-bool OpenGl20Renderer::switchEffectConfig(String const& name) {
+bool OpenGl41Renderer::switchEffectConfig(String const& name) {
   flushImmediatePrimitives();
   auto find = m_effects.find(name);
   if (find == m_effects.end())
@@ -356,7 +355,7 @@ bool OpenGl20Renderer::switchEffectConfig(String const& name) {
   return true;
 }
 
-void OpenGl20Renderer::setScissorRect(Maybe<RectI> const& scissorRect) {
+void OpenGl41Renderer::setScissorRect(Maybe<RectI> const& scissorRect) {
   if (scissorRect == m_scissorRect)
     return;
 
@@ -371,19 +370,19 @@ void OpenGl20Renderer::setScissorRect(Maybe<RectI> const& scissorRect) {
   }
 }
 
-TexturePtr OpenGl20Renderer::createTexture(Image const& texture, TextureAddressing addressing, TextureFiltering filtering) {
+TexturePtr OpenGl41Renderer::createTexture(Image const& texture, TextureAddressing addressing, TextureFiltering filtering) {
   return createGlTexture(texture, addressing, filtering);
 }
 
-void OpenGl20Renderer::setSizeLimitEnabled(bool enabled) {
+void OpenGl41Renderer::setSizeLimitEnabled(bool enabled) {
   m_limitTextureGroupSize = enabled;
 }
 
-void OpenGl20Renderer::setMultiTexturingEnabled(bool enabled) {
+void OpenGl41Renderer::setMultiTexturingEnabled(bool enabled) {
   m_useMultiTexturing = enabled;
 }
 
-TextureGroupPtr OpenGl20Renderer::createTextureGroup(TextureGroupSize textureSize, TextureFiltering filtering) {
+TextureGroupPtr OpenGl41Renderer::createTextureGroup(TextureGroupSize textureSize, TextureFiltering filtering) {
   int maxTextureSize;
   glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
 
@@ -407,28 +406,28 @@ TextureGroupPtr OpenGl20Renderer::createTextureGroup(TextureGroupSize textureSiz
   return glTextureGroup;
 }
 
-RenderBufferPtr OpenGl20Renderer::createRenderBuffer() {
+RenderBufferPtr OpenGl41Renderer::createRenderBuffer() {
   return createGlRenderBuffer();
 }
 
-List<RenderPrimitive>& OpenGl20Renderer::immediatePrimitives() {
+List<RenderPrimitive>& OpenGl41Renderer::immediatePrimitives() {
   return m_immediatePrimitives;
 }
 
-void OpenGl20Renderer::render(RenderPrimitive primitive) {
+void OpenGl41Renderer::render(RenderPrimitive primitive) {
   m_immediatePrimitives.append(std::move(primitive));
 }
 
-void OpenGl20Renderer::renderBuffer(RenderBufferPtr const& renderBuffer, Mat3F const& transformation) {
+void OpenGl41Renderer::renderBuffer(RenderBufferPtr const& renderBuffer, Mat3F const& transformation) {
   flushImmediatePrimitives();
   renderGlBuffer(*convert<GlRenderBuffer>(renderBuffer.get()), transformation);
 }
 
-void OpenGl20Renderer::flush() {
+void OpenGl41Renderer::flush() {
   flushImmediatePrimitives();
 }
 
-void OpenGl20Renderer::setScreenSize(Vec2U screenSize) {
+void OpenGl41Renderer::setScreenSize(Vec2U screenSize) {
   m_screenSize = screenSize;
   glViewport(0, 0, m_screenSize[0], m_screenSize[1]);
   glUniform2f(m_screenSizeUniform, m_screenSize[0], m_screenSize[1]);
@@ -439,7 +438,7 @@ void OpenGl20Renderer::setScreenSize(Vec2U screenSize) {
   }
 }
 
-void OpenGl20Renderer::startFrame() {
+void OpenGl41Renderer::startFrame() {
   if (m_scissorRect)
     glDisable(GL_SCISSOR_TEST);
   
@@ -457,7 +456,7 @@ void OpenGl20Renderer::startFrame() {
     glEnable(GL_SCISSOR_TEST);
 }
 
-void OpenGl20Renderer::finishFrame() {
+void OpenGl41Renderer::finishFrame() {
   flushImmediatePrimitives();
   // Make sure that the immediate render buffer doesn't needlessly lock texutres
   // from being compressed.
@@ -482,14 +481,14 @@ void OpenGl20Renderer::finishFrame() {
     logGlErrorSummary("OpenGL errors this frame");
 }
 
-OpenGl20Renderer::GlTextureAtlasSet::GlTextureAtlasSet(unsigned atlasNumCells)
+OpenGl41Renderer::GlTextureAtlasSet::GlTextureAtlasSet(unsigned atlasNumCells)
   : TextureAtlasSet(16, atlasNumCells) {}
 
-GLuint OpenGl20Renderer::GlTextureAtlasSet::createAtlasTexture(Vec2U const& size, PixelFormat pixelFormat) {
+GLuint OpenGl41Renderer::GlTextureAtlasSet::createAtlasTexture(Vec2U const& size, PixelFormat pixelFormat) {
   GLuint glTextureId;
   glGenTextures(1, &glTextureId);
   if (glTextureId == 0)
-    throw RendererException("Could not generate texture in OpenGL20Renderer::TextureGroup::createAtlasTexture()");
+    throw RendererException("Could not generate texture in OpenGL41Renderer::TextureGroup::createAtlasTexture()");
 
   glBindTexture(GL_TEXTURE_2D, glTextureId);
 
@@ -508,11 +507,11 @@ GLuint OpenGl20Renderer::GlTextureAtlasSet::createAtlasTexture(Vec2U const& size
   return glTextureId;
 }
 
-void OpenGl20Renderer::GlTextureAtlasSet::destroyAtlasTexture(GLuint const& glTexture) {
+void OpenGl41Renderer::GlTextureAtlasSet::destroyAtlasTexture(GLuint const& glTexture) {
   glDeleteTextures(1, &glTexture);
 }
 
-void OpenGl20Renderer::GlTextureAtlasSet::copyAtlasPixels(
+void OpenGl41Renderer::GlTextureAtlasSet::copyAtlasPixels(
     GLuint const& glTexture, Vec2U const& bottomLeft, Image const& image) {
   glBindTexture(GL_TEXTURE_2D, glTexture);
 
@@ -528,23 +527,23 @@ void OpenGl20Renderer::GlTextureAtlasSet::copyAtlasPixels(
   else if (pixelFormat == PixelFormat::BGRA32)
     format = GL_BGRA;
   else
-    throw RendererException("Unsupported texture format in OpenGL20Renderer::TextureGroup::copyAtlasPixels");
+    throw RendererException("Unsupported texture format in OpenGL41Renderer::TextureGroup::copyAtlasPixels");
 
   glTexSubImage2D(GL_TEXTURE_2D, 0, bottomLeft[0], bottomLeft[1], image.width(), image.height(), format, GL_UNSIGNED_BYTE, image.data());
 }
 
-OpenGl20Renderer::GlTextureGroup::GlTextureGroup(unsigned atlasNumCells)
+OpenGl41Renderer::GlTextureGroup::GlTextureGroup(unsigned atlasNumCells)
   : textureAtlasSet(atlasNumCells) {}
 
-OpenGl20Renderer::GlTextureGroup::~GlTextureGroup() {
+OpenGl41Renderer::GlTextureGroup::~GlTextureGroup() {
   textureAtlasSet.reset();
 }
 
-TextureFiltering OpenGl20Renderer::GlTextureGroup::filtering() const {
+TextureFiltering OpenGl41Renderer::GlTextureGroup::filtering() const {
   return textureAtlasSet.textureFiltering;
 }
 
-TexturePtr OpenGl20Renderer::GlTextureGroup::create(Image const& texture) {
+TexturePtr OpenGl41Renderer::GlTextureGroup::create(Image const& texture) {
   // If the image is empty, or would not fit in the texture atlas with border
   // pixels, just create a regular texture
   Vec2U atlasTextureSize = textureAtlasSet.atlasTextureSize();
@@ -558,87 +557,93 @@ TexturePtr OpenGl20Renderer::GlTextureGroup::create(Image const& texture) {
   return glGroupedTexture;
 }
 
-OpenGl20Renderer::GlGroupedTexture::~GlGroupedTexture() {
+OpenGl41Renderer::GlGroupedTexture::~GlGroupedTexture() {
   if (parentAtlasTexture)
     parentGroup->textureAtlasSet.freeTexture(parentAtlasTexture);
 }
 
-Vec2U OpenGl20Renderer::GlGroupedTexture::size() const {
+Vec2U OpenGl41Renderer::GlGroupedTexture::size() const {
   return parentAtlasTexture->imageSize();
 }
 
-TextureFiltering OpenGl20Renderer::GlGroupedTexture::filtering() const {
+TextureFiltering OpenGl41Renderer::GlGroupedTexture::filtering() const {
   return parentGroup->filtering();
 }
 
-TextureAddressing OpenGl20Renderer::GlGroupedTexture::addressing() const {
+TextureAddressing OpenGl41Renderer::GlGroupedTexture::addressing() const {
   return TextureAddressing::Clamp;
 }
 
-GLuint OpenGl20Renderer::GlGroupedTexture::glTextureId() const {
+GLuint OpenGl41Renderer::GlGroupedTexture::glTextureId() const {
   return parentAtlasTexture->atlasTexture();
 }
 
-Vec2U OpenGl20Renderer::GlGroupedTexture::glTextureSize() const {
+Vec2U OpenGl41Renderer::GlGroupedTexture::glTextureSize() const {
   return parentGroup->textureAtlasSet.atlasTextureSize();
 }
 
-Vec2U OpenGl20Renderer::GlGroupedTexture::glTextureCoordinateOffset() const {
+Vec2U OpenGl41Renderer::GlGroupedTexture::glTextureCoordinateOffset() const {
   return parentAtlasTexture->atlasTextureCoordinates().min();
 }
 
-void OpenGl20Renderer::GlGroupedTexture::incrementBufferUseCount() {
+void OpenGl41Renderer::GlGroupedTexture::incrementBufferUseCount() {
   if (bufferUseCount == 0)
     parentAtlasTexture->setLocked(true);
   ++bufferUseCount;
 }
 
-void OpenGl20Renderer::GlGroupedTexture::decrementBufferUseCount() {
+void OpenGl41Renderer::GlGroupedTexture::decrementBufferUseCount() {
   starAssert(bufferUseCount != 0);
   if (bufferUseCount == 1)
     parentAtlasTexture->setLocked(false);
   --bufferUseCount;
 }
 
-OpenGl20Renderer::GlLoneTexture::~GlLoneTexture() {
+OpenGl41Renderer::GlLoneTexture::~GlLoneTexture() {
   if (textureId != 0)
     glDeleteTextures(1, &textureId);
 }
 
-Vec2U OpenGl20Renderer::GlLoneTexture::size() const {
+Vec2U OpenGl41Renderer::GlLoneTexture::size() const {
   return textureSize;
 }
 
-TextureFiltering OpenGl20Renderer::GlLoneTexture::filtering() const {
+TextureFiltering OpenGl41Renderer::GlLoneTexture::filtering() const {
   return textureFiltering;
 }
 
-TextureAddressing OpenGl20Renderer::GlLoneTexture::addressing() const {
+TextureAddressing OpenGl41Renderer::GlLoneTexture::addressing() const {
   return textureAddressing;
 }
 
-GLuint OpenGl20Renderer::GlLoneTexture::glTextureId() const {
+GLuint OpenGl41Renderer::GlLoneTexture::glTextureId() const {
   return textureId;
 }
 
-Vec2U OpenGl20Renderer::GlLoneTexture::glTextureSize() const {
+Vec2U OpenGl41Renderer::GlLoneTexture::glTextureSize() const {
   return textureSize;
 }
 
-Vec2U OpenGl20Renderer::GlLoneTexture::glTextureCoordinateOffset() const {
+Vec2U OpenGl41Renderer::GlLoneTexture::glTextureCoordinateOffset() const {
   return Vec2U();
 }
 
-OpenGl20Renderer::GlRenderBuffer::~GlRenderBuffer() {
+OpenGl41Renderer::GlRenderBuffer::GlRenderBuffer()
+{
+    glGenVertexArrays(1, &vertexArray);
+}
+
+OpenGl41Renderer::GlRenderBuffer::~GlRenderBuffer() {
   for (auto const& texture : usedTextures) {
     if (auto gt = as<GlGroupedTexture>(texture.get()))
       gt->decrementBufferUseCount();
   }
   for (auto const& vb : vertexBuffers)
     glDeleteBuffers(1, &vb.vertexBuffer);
+  glDeleteVertexArrays(1, &vertexArray);
 }
 
-void OpenGl20Renderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
+void OpenGl41Renderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
   for (auto const& texture : usedTextures) {
     if (auto gt = as<GlGroupedTexture>(texture.get()))
       gt->decrementBufferUseCount();
@@ -650,6 +655,8 @@ void OpenGl20Renderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
   List<GLuint> currentTextures;
   List<Vec2U> currentTextureSizes;
   size_t currentVertexCount = 0;
+
+  glBindVertexArray(vertexArray);
 
   auto finishCurrentBuffer = [&]() {
     if (currentVertexCount > 0) {
@@ -760,7 +767,7 @@ void OpenGl20Renderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
     glDeleteBuffers(1, &vb.vertexBuffer);
 }
 
-bool OpenGl20Renderer::logGlErrorSummary(String prefix) {
+bool OpenGl41Renderer::logGlErrorSummary(String prefix) {
   if (GLenum error = glGetError()) {
     Logger::error("{}: ", prefix);
     do {
@@ -787,7 +794,7 @@ bool OpenGl20Renderer::logGlErrorSummary(String prefix) {
   return false;
 }
 
-void OpenGl20Renderer::uploadTextureImage(PixelFormat pixelFormat, Vec2U size, uint8_t const* data) {
+void OpenGl41Renderer::uploadTextureImage(PixelFormat pixelFormat, Vec2U size, uint8_t const* data) {
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
   GLenum format;
@@ -800,12 +807,12 @@ void OpenGl20Renderer::uploadTextureImage(PixelFormat pixelFormat, Vec2U size, u
   else if (pixelFormat == PixelFormat::BGRA32)
     format = GL_BGRA;
   else
-    throw RendererException("Unsupported texture format in OpenGL20Renderer::uploadTextureImage");
+    throw RendererException("Unsupported texture format in OpenGL41Renderer::uploadTextureImage");
 
   glTexImage2D(GL_TEXTURE_2D, 0, format, size[0], size[1], 0, format, GL_UNSIGNED_BYTE, data);
 }
 
-void OpenGl20Renderer::flushImmediatePrimitives() {
+void OpenGl41Renderer::flushImmediatePrimitives() {
   if (m_immediatePrimitives.empty())
     return;
 
@@ -814,7 +821,7 @@ void OpenGl20Renderer::flushImmediatePrimitives() {
   renderGlBuffer(*m_immediateRenderBuffer, Mat3F::identity());
 }
 
-auto OpenGl20Renderer::createGlTexture(Image const& image, TextureAddressing addressing, TextureFiltering filtering)
+auto OpenGl41Renderer::createGlTexture(Image const& image, TextureAddressing addressing, TextureFiltering filtering)
     -> RefPtr<GlLoneTexture> {
   auto glLoneTexture = make_ref<GlLoneTexture>();
   glLoneTexture->textureFiltering = filtering;
@@ -823,7 +830,7 @@ auto OpenGl20Renderer::createGlTexture(Image const& image, TextureAddressing add
 
   glGenTextures(1, &glLoneTexture->textureId);
   if (glLoneTexture->textureId == 0)
-    throw RendererException("Could not generate texture in OpenGL20Renderer::createGlTexture");
+    throw RendererException("Could not generate texture in OpenGL41Renderer::createGlTexture");
 
   glBindTexture(GL_TEXTURE_2D, glLoneTexture->textureId);
 
@@ -850,14 +857,14 @@ auto OpenGl20Renderer::createGlTexture(Image const& image, TextureAddressing add
   return glLoneTexture;
 }
 
-auto OpenGl20Renderer::createGlRenderBuffer() -> shared_ptr<GlRenderBuffer> {
+auto OpenGl41Renderer::createGlRenderBuffer() -> shared_ptr<GlRenderBuffer> {
   auto glrb = make_shared<GlRenderBuffer>();
   glrb->whiteTexture = m_whiteTexture;
   glrb->useMultiTexturing = m_useMultiTexturing;
   return glrb;
 }
 
-void OpenGl20Renderer::renderGlBuffer(GlRenderBuffer const& renderBuffer, Mat3F const& transformation) {
+void OpenGl41Renderer::renderGlBuffer(GlRenderBuffer const& renderBuffer, Mat3F const& transformation) {
   for (auto const& vb : renderBuffer.vertexBuffers) {
     glUniformMatrix3fv(m_vertexTransformUniform, 1, GL_TRUE, transformation.ptr());
 
@@ -874,6 +881,7 @@ void OpenGl20Renderer::renderGlBuffer(GlRenderBuffer const& renderBuffer, Mat3F 
       }
     }
 
+    glBindVertexArray(renderBuffer.vertexArray);
     glBindBuffer(GL_ARRAY_BUFFER, vb.vertexBuffer);
 
     glEnableVertexAttribArray(m_positionAttribute);
@@ -896,7 +904,7 @@ void OpenGl20Renderer::renderGlBuffer(GlRenderBuffer const& renderBuffer, Mat3F 
 }
 
 //Assumes the passed effect program is currently in use.
-void OpenGl20Renderer::setupGlUniforms(Effect& effect) {
+void OpenGl41Renderer::setupGlUniforms(Effect& effect) {
   GLuint program = effect.program;
 
   m_positionAttribute = effect.getAttribute("vertexPosition");
@@ -920,14 +928,14 @@ void OpenGl20Renderer::setupGlUniforms(Effect& effect) {
   glUniform2f(m_screenSizeUniform, m_screenSize[0], m_screenSize[1]);
 }
 
-RefPtr<OpenGl20Renderer::GlFrameBuffer> OpenGl20Renderer::getGlFrameBuffer(String const& id) {
+RefPtr<OpenGl41Renderer::GlFrameBuffer> OpenGl41Renderer::getGlFrameBuffer(String const& id) {
   if (auto ptr = m_frameBuffers.ptr(id))
     return *ptr;
   else
     throw RendererException::format("Frame buffer '{}' does not exist", id);
 }
 
-void OpenGl20Renderer::blitGlFrameBuffer(RefPtr<GlFrameBuffer> const& frameBuffer) {
+void OpenGl41Renderer::blitGlFrameBuffer(RefPtr<GlFrameBuffer> const& frameBuffer) {
   if (frameBuffer->blitted)
     return;
 
@@ -943,7 +951,7 @@ void OpenGl20Renderer::blitGlFrameBuffer(RefPtr<GlFrameBuffer> const& frameBuffe
   frameBuffer->blitted = true;
 }
 
-void OpenGl20Renderer::switchGlFrameBuffer(RefPtr<GlFrameBuffer> const& frameBuffer) {
+void OpenGl41Renderer::switchGlFrameBuffer(RefPtr<GlFrameBuffer> const& frameBuffer) {
   if (m_currentFrameBuffer == frameBuffer)
     return;
 
@@ -951,7 +959,7 @@ void OpenGl20Renderer::switchGlFrameBuffer(RefPtr<GlFrameBuffer> const& frameBuf
   m_currentFrameBuffer = frameBuffer;
 }
 
-GLuint OpenGl20Renderer::Effect::getAttribute(String const& name) {
+GLuint OpenGl41Renderer::Effect::getAttribute(String const& name) {
   auto find = attributes.find(name);
   if (find == attributes.end()) {
     GLuint attrib = glGetAttribLocation(program, name.utf8Ptr());
@@ -961,7 +969,7 @@ GLuint OpenGl20Renderer::Effect::getAttribute(String const& name) {
   return find->second;
 }
 
-GLuint OpenGl20Renderer::Effect::getUniform(String const& name) {
+GLuint OpenGl41Renderer::Effect::getUniform(String const& name) {
   auto find = uniforms.find(name);
   if (find == uniforms.end()) {
     GLuint uniform = glGetUniformLocation(program, name.utf8Ptr());

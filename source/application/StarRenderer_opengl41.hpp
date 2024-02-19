@@ -7,16 +7,16 @@
 
 namespace Star {
 
-STAR_CLASS(OpenGl20Renderer);
+STAR_CLASS(OpenGl41Renderer);
 
 constexpr size_t FrameBufferCount = 1;
 
 // OpenGL 2.0 implementation of Renderer.  OpenGL context must be created and
 // active during construction, destruction, and all method calls.
-class OpenGl20Renderer : public Renderer {
+class OpenGl41Renderer : public Renderer {
 public:
-  OpenGl20Renderer();
-  ~OpenGl20Renderer();
+  OpenGl41Renderer();
+  ~OpenGl41Renderer();
 
   String rendererId() const override;
   Vec2U screenSize() const override;
@@ -132,9 +132,13 @@ private:
       size_t vertexCount = 0;
     };
 
+    GlRenderBuffer();
+
     ~GlRenderBuffer();
 
     void set(List<RenderPrimitive>& primitives) override;
+
+    GLuint vertexArray{};
 
     RefPtr<GlTexture> whiteTexture;
     ByteArray accumulationBuffer;
@@ -198,9 +202,9 @@ private:
 
   void setupGlUniforms(Effect& effect);
 
-  RefPtr<OpenGl20Renderer::GlFrameBuffer> getGlFrameBuffer(String const& id);
-  void blitGlFrameBuffer(RefPtr<OpenGl20Renderer::GlFrameBuffer> const& frameBuffer);
-  void switchGlFrameBuffer(RefPtr<OpenGl20Renderer::GlFrameBuffer> const& frameBuffer);
+  RefPtr<OpenGl41Renderer::GlFrameBuffer> getGlFrameBuffer(String const& id);
+  void blitGlFrameBuffer(RefPtr<OpenGl41Renderer::GlFrameBuffer> const& frameBuffer);
+  void switchGlFrameBuffer(RefPtr<OpenGl41Renderer::GlFrameBuffer> const& frameBuffer);
 
   Vec2U m_screenSize;
 

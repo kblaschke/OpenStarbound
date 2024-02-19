@@ -246,7 +246,7 @@ void ClientApplication::renderInit(RendererPtr renderer) {
       Logger::warn("No rendering config found for renderer with id '{}'", renderer->rendererId());
   };
 
-  renderer->loadConfig(assets->json("/rendering/opengl20.config"));
+  renderer->loadConfig(assets->json("/rendering/opengl41.config"));
 
   loadEffectConfig("world");
   loadEffectConfig("interface");

@@ -2,7 +2,7 @@
 #include "StarLogging.hpp"
 #include "StarSignalHandler.hpp"
 #include "StarTickRateMonitor.hpp"
-#include "StarRenderer_opengl20.hpp"
+#include "StarRenderer_opengl41.hpp"
 #include "StarTtlCache.hpp"
 #include "StarImage.hpp"
 #include "StarImageProcessing.hpp"
@@ -264,6 +264,10 @@ public:
     if (!m_platformServices)
       Logger::info("Application: No platform services available");
 
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+
     Logger::info("Application: Creating SDL Window");
     m_sdlWindow = SDL_CreateWindow(m_windowTitle.utf8Ptr(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
         m_windowSize[0], m_windowSize[1], SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
@@ -309,7 +313,7 @@ public:
       SDL_PauseAudioDevice(m_sdlAudioOutputDevice, 0);
     }
 
-    m_renderer = make_shared<OpenGl20Renderer>();
+    m_renderer = make_shared<OpenGl41Renderer>();
     m_renderer->setScreenSize(m_windowSize);
 
     m_cursorCache.setTimeToLive(30000);
@@ -899,7 +903,7 @@ private:
   bool m_audioEnabled = false;
   bool m_quitRequested = false;
 
-  OpenGl20RendererPtr m_renderer;
+  OpenGl41RendererPtr m_renderer;
   ApplicationUPtr m_application;
   PcPlatformServicesUPtr m_platformServices;
 };
