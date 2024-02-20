@@ -628,9 +628,10 @@ Vec2U OpenGl41Renderer::GlLoneTexture::glTextureCoordinateOffset() const {
   return Vec2U();
 }
 
-OpenGl41Renderer::GlRenderBuffer::GlRenderBuffer()
+OpenGl41Renderer::GlRenderBuffer::GlRenderBuffer(const GlVertexAttributeLocations& attributeLocations)
+  : attributeLocations(attributeLocations)
+  , useMultiTexturing(true)
 {
-    glGenVertexArrays(1, &vertexArray);
 }
 
 OpenGl41Renderer::GlRenderBuffer::~GlRenderBuffer() {
@@ -639,8 +640,11 @@ OpenGl41Renderer::GlRenderBuffer::~GlRenderBuffer() {
       gt->decrementBufferUseCount();
   }
   for (auto const& vb : vertexBuffers)
-    glDeleteBuffers(1, &vb.vertexBuffer);
-  glDeleteVertexArrays(1, &vertexArray);
+  {
+      glDeleteBuffers(1, &vb.vertexBuffer);
+      glDeleteVertexArrays(1, &vb.vertexArray);
+  }
+
 }
 
 void OpenGl41Renderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
@@ -656,7 +660,6 @@ void OpenGl41Renderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
   List<Vec2U> currentTextureSizes;
   size_t currentVertexCount = 0;
 
-  glBindVertexArray(vertexArray);
 
   auto finishCurrentBuffer = [&]() {
     if (currentVertexCount > 0) {
@@ -667,15 +670,35 @@ void OpenGl41Renderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
       vb.vertexCount = currentVertexCount;
       if (!oldVertexBuffers.empty()) {
         auto oldVb = oldVertexBuffers.takeLast();
+        vb.vertexArray = oldVb.vertexArray;
         vb.vertexBuffer = oldVb.vertexBuffer;
+        glBindVertexArray(vb.vertexArray);
         glBindBuffer(GL_ARRAY_BUFFER, vb.vertexBuffer);
         if (oldVb.vertexCount >= vb.vertexCount)
           glBufferSubData(GL_ARRAY_BUFFER, 0, accumulationBuffer.size(), accumulationBuffer.ptr());
         else
           glBufferData(GL_ARRAY_BUFFER, accumulationBuffer.size(), accumulationBuffer.ptr(), GL_STREAM_DRAW);
       } else {
+        glGenVertexArrays(1, &vb.vertexArray);
         glGenBuffers(1, &vb.vertexBuffer);
+        glBindVertexArray(vb.vertexArray);
         glBindBuffer(GL_ARRAY_BUFFER, vb.vertexBuffer);
+
+        glEnableVertexAttribArray(attributeLocations.position);
+        glEnableVertexAttribArray(attributeLocations.texCoord);
+        glEnableVertexAttribArray(attributeLocations.texIndex);
+        glEnableVertexAttribArray(attributeLocations.color);
+
+        glVertexAttribPointer(attributeLocations.position, 2, GL_FLOAT, GL_FALSE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, screenCoordinate));
+        glVertexAttribPointer(attributeLocations.texCoord, 2, GL_FLOAT, GL_FALSE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, textureCoordinate));
+        glVertexAttribPointer(attributeLocations.texIndex, 1, GL_FLOAT, GL_FALSE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, textureIndex));
+        glVertexAttribPointer(attributeLocations.color, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, color));
+
+        if (attributeLocations.param1 != -1) {
+          glEnableVertexAttribArray(attributeLocations.param1);
+          glVertexAttribPointer(attributeLocations.param1, 1, GL_FLOAT, GL_FALSE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, param1));
+        }
+
         glBufferData(GL_ARRAY_BUFFER, accumulationBuffer.size(), accumulationBuffer.ptr(), GL_STREAM_DRAW);
       }
 
@@ -727,7 +750,6 @@ void OpenGl41Renderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
 
   float textureIndex = 0.0f;
   Vec2F textureOffset = {};
-  Texture* lastTexture = nullptr;
   for (auto& primitive : primitives) {
     if (auto tri = primitive.ptr<RenderTriangle>()) {
       tie(textureIndex, textureOffset) = addCurrentTexture(std::move(tri->texture));
@@ -764,7 +786,10 @@ void OpenGl41Renderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
   finishCurrentBuffer();
 
   for (auto const& vb : oldVertexBuffers)
-    glDeleteBuffers(1, &vb.vertexBuffer);
+  {
+      glDeleteBuffers(1, &vb.vertexBuffer);
+      glDeleteVertexArrays(1, &vb.vertexArray);
+  }
 }
 
 bool OpenGl41Renderer::logGlErrorSummary(String prefix) {
@@ -858,7 +883,7 @@ auto OpenGl41Renderer::createGlTexture(Image const& image, TextureAddressing add
 }
 
 auto OpenGl41Renderer::createGlRenderBuffer() -> shared_ptr<GlRenderBuffer> {
-  auto glrb = make_shared<GlRenderBuffer>();
+  auto glrb = make_shared<GlRenderBuffer>(m_attributeLocations);
   glrb->whiteTexture = m_whiteTexture;
   glrb->useMultiTexturing = m_useMultiTexturing;
   return glrb;
@@ -881,24 +906,8 @@ void OpenGl41Renderer::renderGlBuffer(GlRenderBuffer const& renderBuffer, Mat3F 
       }
     }
 
-    glBindVertexArray(renderBuffer.vertexArray);
+    glBindVertexArray(vb.vertexArray);
     glBindBuffer(GL_ARRAY_BUFFER, vb.vertexBuffer);
-
-    glEnableVertexAttribArray(m_positionAttribute);
-    glEnableVertexAttribArray(m_texCoordAttribute);
-    glEnableVertexAttribArray(m_texIndexAttribute);
-    glEnableVertexAttribArray(m_colorAttribute);
-
-    glVertexAttribPointer(m_positionAttribute, 2, GL_FLOAT, GL_FALSE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, screenCoordinate));
-    glVertexAttribPointer(m_texCoordAttribute, 2, GL_FLOAT, GL_FALSE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, textureCoordinate));
-    glVertexAttribPointer(m_texIndexAttribute, 1, GL_FLOAT, GL_FALSE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, textureIndex));
-    glVertexAttribPointer(m_colorAttribute, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, color));
-
-    if (m_param1Attribute != -1) {
-      glEnableVertexAttribArray(m_param1Attribute);
-      glVertexAttribPointer(m_param1Attribute, 1, GL_FLOAT, GL_FALSE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, param1));
-    }
-
     glDrawArrays(GL_TRIANGLES, 0, vb.vertexCount);
   }
 }
@@ -907,11 +916,11 @@ void OpenGl41Renderer::renderGlBuffer(GlRenderBuffer const& renderBuffer, Mat3F 
 void OpenGl41Renderer::setupGlUniforms(Effect& effect) {
   GLuint program = effect.program;
 
-  m_positionAttribute = effect.getAttribute("vertexPosition");
-  m_texCoordAttribute = effect.getAttribute("vertexTextureCoordinate");
-  m_texIndexAttribute = effect.getAttribute("vertexTextureIndex");
-  m_colorAttribute = effect.getAttribute("vertexColor");
-  m_param1Attribute = effect.getAttribute("vertexParam1");
+  m_attributeLocations.position = effect.getAttribute("vertexPosition");
+  m_attributeLocations.texCoord = effect.getAttribute("vertexTextureCoordinate");
+  m_attributeLocations.texIndex = effect.getAttribute("vertexTextureIndex");
+  m_attributeLocations.color= effect.getAttribute("vertexColor");
+  m_attributeLocations.param1= effect.getAttribute("vertexParam1");
 
   m_textureUniforms.clear();
   m_textureSizeUniforms.clear();

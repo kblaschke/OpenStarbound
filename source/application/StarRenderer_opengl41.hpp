@@ -112,6 +112,15 @@ private:
     TextureFiltering textureFiltering = TextureFiltering::Nearest;
   };
 
+  struct GlVertexAttributeLocations
+  {
+      GLint position{-1};
+      GLint texCoord{-1};
+      GLint texIndex{-1};
+      GLint color{-1};
+      GLint param1{-1};
+  };
+
   struct GlRenderVertex {
     Vec2F screenCoordinate;
     Vec2F textureCoordinate;
@@ -128,17 +137,18 @@ private:
 
     struct GlVertexBuffer {
       List<GlVertexBufferTexture> textures;
-      GLuint vertexBuffer = 0;
-      size_t vertexCount = 0;
+      GLuint vertexArray{};
+      GLuint vertexBuffer{};
+      size_t vertexCount{};
     };
 
-    GlRenderBuffer();
+    explicit GlRenderBuffer(const GlVertexAttributeLocations& attributeLocations);
 
-    ~GlRenderBuffer();
+    ~GlRenderBuffer() override;
 
     void set(List<RenderPrimitive>& primitives) override;
 
-    GLuint vertexArray{};
+    const GlVertexAttributeLocations& attributeLocations;
 
     RefPtr<GlTexture> whiteTexture;
     ByteArray accumulationBuffer;
@@ -210,11 +220,7 @@ private:
 
   GLuint m_program = 0;
 
-  GLint m_positionAttribute = -1;
-  GLint m_texCoordAttribute = -1;
-  GLint m_texIndexAttribute = -1;
-  GLint m_colorAttribute = -1;
-  GLint m_param1Attribute = -1;
+  GlVertexAttributeLocations m_attributeLocations;
 
   List<GLint> m_textureUniforms = {};
   List<GLint> m_textureSizeUniforms = {};
