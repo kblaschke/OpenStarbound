@@ -151,17 +151,17 @@ void Cinematic::render() {
   if (m_backgroundColor) {
     Vec4B backgroundColor = m_backgroundColor.get();
     backgroundColor[3] *= fadeFactor;
-    renderer->render(renderFlatRect(RectF::withSize(Vec2F(0, 0), m_windowSize), backgroundColor, 0.0f));
+    renderer->render(Renderer::renderFlatRect(RectF::withSize(Vec2F(0, 0), m_windowSize), backgroundColor, 0.0f));
   }
 
   if (m_letterbox && !m_backgroundColor) {
     Vec4B letterboxColor = Vec4B(0, 0, 0, 255 * fadeFactor);
     if (m_windowSize[0] / vWidth > m_windowSize[1] / vHeight) {
-      renderer->render(renderFlatRect(RectF(0, 0, m_scissorRect.xMin(), m_windowSize[1]), letterboxColor, 0.0f));
-      renderer->render(renderFlatRect(RectF(m_scissorRect.xMax(), 0, m_windowSize[0], m_windowSize[1]), letterboxColor, 0.0f));
+      renderer->render(Renderer::renderFlatRect(RectF(0, 0, m_scissorRect.xMin(), m_windowSize[1]), letterboxColor, 0.0f));
+      renderer->render(Renderer::renderFlatRect(RectF(m_scissorRect.xMax(), 0, m_windowSize[0], m_windowSize[1]), letterboxColor, 0.0f));
     } else {
-      renderer->render(renderFlatRect(RectF(0, 0, m_windowSize[0], m_scissorRect.yMin()), letterboxColor, 0.0f));
-      renderer->render(renderFlatRect(RectF(0, m_scissorRect.yMax(), m_windowSize[0], m_windowSize[1]), letterboxColor, 0.0f));
+      renderer->render(Renderer::renderFlatRect(RectF(0, 0, m_windowSize[0], m_scissorRect.yMin()), letterboxColor, 0.0f));
+      renderer->render(Renderer::renderFlatRect(RectF(0, m_scissorRect.yMax(), m_windowSize[0], m_windowSize[1]), letterboxColor, 0.0f));
     }
   }
 

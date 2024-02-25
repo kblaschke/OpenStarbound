@@ -75,7 +75,7 @@ void TitleScreen::render() {
   m_renderer->flush();
 
   auto skyBackdropDarken = jsonToColor(assets->json("/interface/windowconfig/title.config:skyBackdropDarken"));
-  m_renderer->render(renderFlatRect(RectF(0, 0, windowWidth(), windowHeight()), skyBackdropDarken.toRgba(), 0.0f));
+  m_renderer->render(Renderer::renderFlatRect(RectF(0, 0, windowWidth(), windowHeight()), skyBackdropDarken.toRgba(), 0.0f));
 
   m_renderer->flush();
 

@@ -42,7 +42,7 @@ GuiContext::~GuiContext() {
 
 void GuiContext::renderInit(RendererPtr renderer) {
   m_renderer = std::move(renderer);
-  auto textureGroup = m_renderer->createTextureGroup();
+  auto textureGroup = m_renderer->createTextureGroup(TextureGroupSize::Medium, TextureFiltering::Nearest);
   m_textureCollection = make_shared<AssetTextureGroup>(textureGroup);
   m_drawablePainter = make_shared<DrawablePainter>(m_renderer, m_textureCollection);
   m_textPainter = make_shared<TextPainter>(m_renderer, textureGroup);

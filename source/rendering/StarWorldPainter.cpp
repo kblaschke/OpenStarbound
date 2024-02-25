@@ -29,7 +29,7 @@ void WorldPainter::renderInit(RendererPtr renderer) {
   m_assets = Root::singleton().assets();
 
   m_renderer = std::move(renderer);
-  auto textureGroup = m_renderer->createTextureGroup(TextureGroupSize::Large);
+  auto textureGroup = m_renderer->createTextureGroup(TextureGroupSize::Large, TextureFiltering::Nearest);
   m_textPainter = make_shared<TextPainter>(m_renderer, textureGroup);
   m_tilePainter = make_shared<TilePainter>(m_renderer);
   m_drawablePainter = make_shared<DrawablePainter>(m_renderer, make_shared<AssetTextureGroup>(textureGroup));
@@ -153,7 +153,7 @@ void WorldPainter::render(WorldRenderData& renderData, function<void()> lightWai
 
   auto dimLevel = round(renderData.dimLevel * 255);
   if (dimLevel != 0)
-    m_renderer->render(renderFlatRect(RectF::withSize({}, Vec2F(m_camera.screenSize())), Vec4B(renderData.dimColor, dimLevel), 0.0f));
+    m_renderer->render(Renderer::renderFlatRect(RectF::withSize({}, Vec2F(m_camera.screenSize())), Vec4B(renderData.dimColor, dimLevel), 0.0f));
 
   int64_t textureTimeout = m_assets->json("/rendering.config:textureTimeout").toInt();
   m_textPainter->cleanup(textureTimeout);

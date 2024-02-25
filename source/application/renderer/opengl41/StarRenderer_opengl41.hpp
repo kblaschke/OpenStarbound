@@ -1,7 +1,7 @@
 #pragma once
 
 #include "StarTextureAtlas.hpp"
-#include "StarRenderer.hpp"
+#include "renderer/StarRenderer.hpp"
 
 #include "GL/glew.h"
 
@@ -11,7 +11,7 @@ STAR_CLASS(OpenGl41Renderer);
 
 constexpr size_t FrameBufferCount = 1;
 
-// OpenGL 2.0 implementation of Renderer.  OpenGL context must be created and
+// OpenGL 4.1 implementation of Renderer.  OpenGL context must be created and
 // active during construction, destruction, and all method calls.
 class OpenGl41Renderer : public Renderer {
 public:

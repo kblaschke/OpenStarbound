@@ -29,4 +29,12 @@ ADD_EXECUTABLE (starbound WIN32
   $<TARGET_OBJECTS:star_application> $<TARGET_OBJECTS:star_rendering> $<TARGET_OBJECTS:star_windowing> $<TARGET_OBJECTS:star_frontend>
   ${star_client_HEADERS} ${star_client_SOURCES} ${star_client_RESOURCES})
 TARGET_PRECOMPILE_HEADERS (starbound REUSE_FROM star_core)
-TARGET_LINK_LIBRARIES (starbound ${STAR_EXT_LIBS} ${STAR_EXT_GUI_LIBS})
+TARGET_LINK_LIBRARIES (starbound
+                       PRIVATE
+                       star_application
+                       star_rendering
+                       star_windowing
+                       star_frontend
+                       ${STAR_EXT_LIBS}
+                       ${STAR_EXT_GUI_LIBS}
+                       )

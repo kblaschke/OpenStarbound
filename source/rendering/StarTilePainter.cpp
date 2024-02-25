@@ -12,7 +12,7 @@ namespace Star {
 
 TilePainter::TilePainter(RendererPtr renderer) : TileDrawer() {
   m_renderer = std::move(renderer);
-  m_textureGroup = m_renderer->createTextureGroup(TextureGroupSize::Large);
+  m_textureGroup = m_renderer->createTextureGroup(TextureGroupSize::Large, TextureFiltering::Nearest);
 
   auto& root = Root::singleton();
   auto assets = root.assets();
@@ -27,7 +27,7 @@ TilePainter::TilePainter(RendererPtr renderer) : TileDrawer() {
 
   for (auto const& liquid : root.liquidsDatabase()->allLiquidSettings()) {
     m_liquids.set(liquid->id, LiquidInfo{
-        m_renderer->createTexture(*assets->image(liquid->config.getString("texture")), TextureAddressing::Wrap),
+        m_renderer->createTexture(*assets->image(liquid->config.getString("texture")), TextureAddressing::Wrap, TextureFiltering::Nearest),
         jsonToColor(liquid->config.get("color")).toRgba(),
         jsonToColor(liquid->config.get("bottomLightMix")).toRgbF(),
         liquid->config.getFloat("textureMovementFactor")
