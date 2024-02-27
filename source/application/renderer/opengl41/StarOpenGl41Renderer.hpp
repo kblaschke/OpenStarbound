@@ -18,8 +18,14 @@ public:
   OpenGl41Renderer();
   ~OpenGl41Renderer();
 
+  void initialize() override;
+
   String rendererId() const override;
   Vec2U screenSize() const override;
+  void setScreenSize(Vec2U screenSize) override;
+
+  void startFrame() override;
+  void finishFrame() override;
 
   void loadConfig(Json const& config) override;
   void loadEffectConfig(String const& name, Json const& effectConfig, StringMap<String> const& shaders) override;
@@ -42,11 +48,6 @@ public:
   void renderBuffer(RenderBufferPtr const& renderBuffer, Mat3F const& transformation) override;
 
   void flush() override;
-
-  void setScreenSize(Vec2U screenSize);
-
-  void startFrame();
-  void finishFrame();
 
 private:
   struct GlTextureAtlasSet : public TextureAtlasSet<GLuint> {
@@ -112,13 +113,12 @@ private:
     TextureFiltering textureFiltering = TextureFiltering::Nearest;
   };
 
-  struct GlVertexAttributeLocations
-  {
-      GLint position{-1};
-      GLint texCoord{-1};
-      GLint texIndex{-1};
-      GLint color{-1};
-      GLint param1{-1};
+  struct GlVertexAttributeLocations {
+    GLint position{-1};
+    GLint texCoord{-1};
+    GLint texIndex{-1};
+    GLint color{-1};
+    GLint param1{-1};
   };
 
   struct GlRenderVertex {
@@ -173,7 +173,7 @@ private:
     GLint textureSizeUniform = -1;
     RefPtr<GlLoneTexture> textureValue;
   };
-  
+
   struct GlFrameBuffer : RefCounter {
     GLuint id = 0;
     RefPtr<GlLoneTexture> texture;
@@ -202,7 +202,9 @@ private:
   static bool logGlErrorSummary(String prefix);
   static void uploadTextureImage(PixelFormat pixelFormat, Vec2U size, uint8_t const* data);
 
-  static RefPtr<GlLoneTexture> createGlTexture(Image const& texture, TextureAddressing addressing, TextureFiltering filtering);
+  static RefPtr<GlLoneTexture> createGlTexture(Image const& texture,
+                                               TextureAddressing addressing,
+                                               TextureFiltering filtering);
 
   shared_ptr<GlRenderBuffer> createGlRenderBuffer();
 
@@ -215,6 +217,8 @@ private:
   RefPtr<OpenGl41Renderer::GlFrameBuffer> getGlFrameBuffer(String const& id);
   void blitGlFrameBuffer(RefPtr<OpenGl41Renderer::GlFrameBuffer> const& frameBuffer);
   void switchGlFrameBuffer(RefPtr<OpenGl41Renderer::GlFrameBuffer> const& frameBuffer);
+
+  bool m_initialized{false};
 
   Vec2U m_screenSize;
 

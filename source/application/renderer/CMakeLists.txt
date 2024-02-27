@@ -1,49 +1,41 @@
 add_library(star_renderer STATIC
-            StarRenderBuffer.hpp
-            StarRenderQuad.hpp
-            StarRenderTriangle.hpp
-            StarRenderVertex.hpp
-            StarRenderer.cpp
-            StarRenderer.hpp
-            StarTexture.hpp
-            StarTextureGroup.hpp
-            StarRenderPoly.hpp
-            StarRenderTriangle.cpp
-            StarRenderPoly.cpp
-            StarTexture.cpp
-            StarRenderQuad.cpp
-            )
+        StarRenderBuffer.hpp
+        StarRenderPoly.cpp
+        StarRenderPoly.hpp
+        StarRenderQuad.cpp
+        StarRenderQuad.hpp
+        StarRenderTriangle.cpp
+        StarRenderTriangle.hpp
+        StarRenderVertex.hpp
+        StarRenderer.cpp
+        StarRenderer.hpp
+        StarTexture.cpp
+        StarTexture.hpp
+        StarTextureGroup.hpp
+)
 
 target_include_directories(star_renderer
-                           PRIVATE
-                           ${STAR_EXTERN_INCLUDES}
-                           ${STAR_CORE_INCLUDES}
-                           ${STAR_PLATFORM_INCLUDES}
-                           ${STAR_APPLICATION_INCLUDES}
-                           PUBLIC
-                           ${CMAKE_CURRENT_SOURCE_DIR}
-                           )
+        PRIVATE
+        ${STAR_EXTERN_INCLUDES}
+        ${STAR_CORE_INCLUDES}
+        ${STAR_PLATFORM_INCLUDES}
+        ${STAR_APPLICATION_INCLUDES}
+        PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
-if(STAR_RENDERER_OPENGL)
-    if(STAR_USE_OPENGL_ES)
+if (STAR_RENDERER_OPENGL)
+    if (STAR_USE_OPENGL_ES)
         add_subdirectory(opengles31)
-    else()
+    else ()
         add_subdirectory(opengl41)
-        target_sources(star_renderer
-                       PRIVATE
-                       $<TARGET_OBJECTS:star_renderer_opengl41>
-                       )
-        target_link_libraries(star_renderer
-                              PUBLIC
-                              star_renderer_opengl41
-                              )
-    endif()
-endif()
+    endif ()
+endif ()
 
-if(STAR_RENDERER_VULKAN)
+if (STAR_RENDERER_VULKAN)
     add_subdirectory(vulkan)
-endif()
+endif ()
 
-if(STAR_RENDERER_METAL)
+if (STAR_RENDERER_METAL)
     add_subdirectory(metal)
-endif()
+endif ()

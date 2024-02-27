@@ -2,10 +2,11 @@
 #include "StarLogging.hpp"
 #include "StarSignalHandler.hpp"
 #include "StarTickRateMonitor.hpp"
-#include "StarRenderer_opengl41.hpp"
+#include "StarRenderer.hpp"
 #include "StarTtlCache.hpp"
 #include "StarImage.hpp"
 #include "StarImageProcessing.hpp"
+#include "StarDynamicLib.hpp"
 
 #include <SDL.h>
 #include "StarPlatformServices_pc.hpp"
@@ -225,7 +226,9 @@ public:
     if (SDL_Init(0))
       throw ApplicationException(strf("Couldn't initialize SDL: {}", SDL_GetError()));
 
+    String appBasePath;
     if (char* basePath = SDL_GetBasePath()) {
+      appBasePath = basePath;
       File::changeDirectory(basePath);
       SDL_free(basePath);
     }
@@ -313,7 +316,18 @@ public:
       SDL_PauseAudioDevice(m_sdlAudioOutputDevice, 0);
     }
 
-    m_renderer = make_shared<OpenGl41Renderer>();
+    m_rendererLibrary = DynamicLib::loadLibraryBase(appBasePath + String("star_renderer_opengl41"));
+    if (!m_rendererLibrary)
+      throw ApplicationException::format("Application: Could not load renderer library");
+
+    auto createFunc = reinterpret_cast<RendererCreateFunction>(m_rendererLibrary->funcPtr("CreateRenderer"));
+    auto destroyFunc = reinterpret_cast<RendererDestroyFunction>(m_rendererLibrary->funcPtr("DestroyRenderer"));
+
+    if (!createFunc || !destroyFunc)
+      throw ApplicationException::format("Application: Renderer library interface is not valid!");
+
+    m_renderer = createFunc();
+    m_renderer->initialize();
     m_renderer->setScreenSize(m_windowSize);
 
     m_cursorCache.setTimeToLive(30000);
@@ -326,7 +340,9 @@ public:
 
     closeAudioInputDevice();
 
-    m_renderer.reset();
+    auto destroyFunc = reinterpret_cast<RendererDestroyFunction>(m_rendererLibrary->funcPtr("DestroyRenderer"));
+    destroyFunc(m_renderer);
+    m_rendererLibrary.reset();
 
     Logger::info("Application: Destroying SDL Window");
     SDL_DestroyWindow(m_sdlWindow);
@@ -903,7 +919,8 @@ private:
   bool m_audioEnabled = false;
   bool m_quitRequested = false;
 
-  OpenGl41RendererPtr m_renderer;
+  DynamicLibUPtr m_rendererLibrary;
+  RendererPtr m_renderer;
   ApplicationUPtr m_application;
   PcPlatformServicesUPtr m_platformServices;
 };

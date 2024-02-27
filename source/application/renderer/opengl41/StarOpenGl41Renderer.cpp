@@ -1,4 +1,4 @@
-#include "StarRenderer_opengl41.hpp"
+#include "StarOpenGl41Renderer.hpp"
 #include "StarJsonExtra.hpp"
 #include "StarCasting.hpp"
 #include "StarLogging.hpp"
@@ -75,29 +75,6 @@ OpenGl41Renderer::OpenGl41Renderer() {
 
   if (!GLEW_VERSION_4_1)
     throw RendererException("OpenGL 4.1 not available!");
-
-  Logger::info("OpenGL version: '{}' vendor: '{}' renderer: '{}' shader: '{}'",
-      (const char*)glGetString(GL_VERSION),
-      (const char*)glGetString(GL_VENDOR),
-      (const char*)glGetString(GL_RENDERER),
-      (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));
-
-  glClearColor(0.0, 0.0, 0.0, 1.0);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  glDisable(GL_DEPTH_TEST);
-
-  m_whiteTexture = createGlTexture(Image::filled({1, 1}, Vec4B(255, 255, 255, 255), PixelFormat::RGBA32),
-      TextureAddressing::Clamp,
-      TextureFiltering::Nearest);
-  m_immediateRenderBuffer = createGlRenderBuffer();
-
-  loadEffectConfig("internal", JsonObject(), {{"vertex", DefaultVertexShader}, {"fragment", DefaultFragmentShader}});
-
-  m_limitTextureGroupSize = false;
-  m_useMultiTexturing = true;
-
-  logGlErrorSummary("OpenGL errors during renderer initialization");
 }
 
 OpenGl41Renderer::~OpenGl41Renderer() {
@@ -106,6 +83,36 @@ OpenGl41Renderer::~OpenGl41Renderer() {
 
   m_frameBuffers.clear();
   logGlErrorSummary("OpenGL errors during shutdown");
+}
+
+void OpenGl41Renderer::initialize() {
+  if (m_initialized)
+    return;
+
+  Logger::info("OpenGL version: '{}' vendor: '{}' renderer: '{}' shader: '{}'",
+               (const char*)glGetString(GL_VERSION),
+               (const char*)glGetString(GL_VENDOR),
+               (const char*)glGetString(GL_RENDERER),
+               (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));
+
+  glClearColor(0.0, 0.0, 0.0, 1.0);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glDisable(GL_DEPTH_TEST);
+
+  m_whiteTexture = createGlTexture(Image::filled({1, 1}, Vec4B(255, 255, 255, 255), PixelFormat::RGBA32),
+                                   TextureAddressing::Clamp,
+                                   TextureFiltering::Nearest);
+  m_immediateRenderBuffer = createGlRenderBuffer();
+
+  loadEffectConfig("internal", JsonObject(), {{"vertex", DefaultVertexShader}, {"fragment", DefaultFragmentShader}});
+
+  m_limitTextureGroupSize = false;
+  m_useMultiTexturing = true;
+
+  logGlErrorSummary("OpenGL errors during renderer initialization");
+
+  m_initialized = true;
 }
 
 String OpenGl41Renderer::rendererId() const {
@@ -120,8 +127,8 @@ OpenGl41Renderer::GlFrameBuffer::GlFrameBuffer(Json const& fbConfig) : config(fb
   texture = createGlTexture(Image(), TextureAddressing::Clamp, TextureFiltering::Nearest);
   glBindTexture(GL_TEXTURE_2D, texture->glTextureId());
 
-  Vec2U size = jsonToVec2U(config.getArray("size", { 256, 256 }));
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, size[0] , size[1], 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+  Vec2U size = jsonToVec2U(config.getArray("size", {256, 256}));
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, size[0], size[1], 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
 
   glGenFramebuffers(1, &id);
   if (!id)
@@ -135,7 +142,6 @@ OpenGl41Renderer::GlFrameBuffer::GlFrameBuffer(Json const& fbConfig) : config(fb
     throw RendererException("OpenGL framebuffer is not complete!");
 }
 
-
 OpenGl41Renderer::GlFrameBuffer::~GlFrameBuffer() {
   glDeleteFramebuffers(1, &id);
   texture.reset();
@@ -148,7 +154,9 @@ void OpenGl41Renderer::loadConfig(Json const& config) {
     m_frameBuffers[pair.first] = make_ref<GlFrameBuffer>(pair.second);
 }
 
-void OpenGl41Renderer::loadEffectConfig(String const& name, Json const& effectConfig, StringMap<String> const& shaders) {
+void OpenGl41Renderer::loadEffectConfig(String const& name,
+                                        Json const& effectConfig,
+                                        StringMap<String> const& shaders) {
   if (m_effects.contains(name)) {
     Logger::warn("OpenGL effect {} already exists", name);
     switchEffectConfig(name);
@@ -262,16 +270,19 @@ void OpenGl41Renderer::loadEffectConfig(String const& name, Json const& effectCo
     if (effectTexture.textureUniform == -1) {
       Logger::warn("OpenGl41 effect parameter '{}' has no associated uniform, skipping", p.first);
     } else {
-        effectTexture.textureUnit = parameterTextureUnit++;
-        glUniform1i(effectTexture.textureUniform, effectTexture.textureUnit);
+      effectTexture.textureUnit = parameterTextureUnit++;
+      glUniform1i(effectTexture.textureUniform, effectTexture.textureUnit);
 
-        effectTexture.textureAddressing = TextureAddressingNames.getLeft(p.second.getString("textureAddressing", "clamp"));
-        effectTexture.textureFiltering = TextureFilteringNames.getLeft(p.second.getString("textureFiltering", "nearest"));
-        if (auto tsu = p.second.optString("textureSizeUniform")) {
-          effectTexture.textureSizeUniform = glGetUniformLocation(m_program, tsu->utf8Ptr());
-          if (effectTexture.textureSizeUniform == -1)
-            Logger::warn("OpenGl41 effect parameter '{}' has textureSizeUniform '{}' with no associated uniform", p.first, *tsu);
-        }
+      effectTexture.textureAddressing =
+        TextureAddressingNames.getLeft(p.second.getString("textureAddressing", "clamp"));
+      effectTexture.textureFiltering = TextureFilteringNames.getLeft(p.second.getString("textureFiltering", "nearest"));
+      if (auto tsu = p.second.optString("textureSizeUniform")) {
+        effectTexture.textureSizeUniform = glGetUniformLocation(m_program, tsu->utf8Ptr());
+        if (effectTexture.textureSizeUniform == -1)
+          Logger::warn("OpenGl41 effect parameter '{}' has textureSizeUniform '{}' with no associated uniform",
+                       p.first,
+                       *tsu);
+      }
 
       effect.textures[p.first] = effectTexture;
     }
@@ -370,7 +381,9 @@ void OpenGl41Renderer::setScissorRect(Maybe<RectI> const& scissorRect) {
   }
 }
 
-TexturePtr OpenGl41Renderer::createTexture(Image const& texture, TextureAddressing addressing, TextureFiltering filtering) {
+TexturePtr OpenGl41Renderer::createTexture(Image const& texture,
+                                           TextureAddressing addressing,
+                                           TextureFiltering filtering) {
   return createGlTexture(texture, addressing, filtering);
 }
 
@@ -441,7 +454,7 @@ void OpenGl41Renderer::setScreenSize(Vec2U screenSize) {
 void OpenGl41Renderer::startFrame() {
   if (m_scissorRect)
     glDisable(GL_SCISSOR_TEST);
-  
+
   for (auto& frameBuffer : m_frameBuffers) {
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, frameBuffer.second->id);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -458,21 +471,21 @@ void OpenGl41Renderer::startFrame() {
 
 void OpenGl41Renderer::finishFrame() {
   flushImmediatePrimitives();
-  // Make sure that the immediate render buffer doesn't needlessly lock texutres
+  // Make sure that the immediate render buffer doesn't needlessly lock textures
   // from being compressed.
   List<RenderPrimitive> empty;
   m_immediateRenderBuffer->set(empty);
 
   filter(m_liveTextureGroups, [](auto const& p) {
-        unsigned const CompressionsPerFrame = 1;
+    unsigned const CompressionsPerFrame = 1;
 
-        if (!p.unique() || p->textureAtlasSet.totalTextures() > 0) {
-          p->textureAtlasSet.compressionPass(CompressionsPerFrame);
-          return true;
-        }
+    if (!p.unique() || p->textureAtlasSet.totalTextures() > 0) {
+      p->textureAtlasSet.compressionPass(CompressionsPerFrame);
+      return true;
+    }
 
-        return false;
-      });
+    return false;
+  });
 
   // Blit if another shader hasn't
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -512,7 +525,7 @@ void OpenGl41Renderer::GlTextureAtlasSet::destroyAtlasTexture(GLuint const& glTe
 }
 
 void OpenGl41Renderer::GlTextureAtlasSet::copyAtlasPixels(
-    GLuint const& glTexture, Vec2U const& bottomLeft, Image const& image) {
+  GLuint const& glTexture, Vec2U const& bottomLeft, Image const& image) {
   glBindTexture(GL_TEXTURE_2D, glTexture);
 
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -529,7 +542,15 @@ void OpenGl41Renderer::GlTextureAtlasSet::copyAtlasPixels(
   else
     throw RendererException("Unsupported texture format in OpenGL41Renderer::TextureGroup::copyAtlasPixels");
 
-  glTexSubImage2D(GL_TEXTURE_2D, 0, bottomLeft[0], bottomLeft[1], image.width(), image.height(), format, GL_UNSIGNED_BYTE, image.data());
+  glTexSubImage2D(GL_TEXTURE_2D,
+                  0,
+                  bottomLeft[0],
+                  bottomLeft[1],
+                  image.width(),
+                  image.height(),
+                  format,
+                  GL_UNSIGNED_BYTE,
+                  image.data());
 }
 
 OpenGl41Renderer::GlTextureGroup::GlTextureGroup(unsigned atlasNumCells)
@@ -629,9 +650,7 @@ Vec2U OpenGl41Renderer::GlLoneTexture::glTextureCoordinateOffset() const {
 }
 
 OpenGl41Renderer::GlRenderBuffer::GlRenderBuffer(const GlVertexAttributeLocations& attributeLocations)
-  : attributeLocations(attributeLocations)
-  , useMultiTexturing(true)
-{
+  : attributeLocations(attributeLocations), useMultiTexturing(true) {
 }
 
 OpenGl41Renderer::GlRenderBuffer::~GlRenderBuffer() {
@@ -639,10 +658,9 @@ OpenGl41Renderer::GlRenderBuffer::~GlRenderBuffer() {
     if (auto gt = as<GlGroupedTexture>(texture.get()))
       gt->decrementBufferUseCount();
   }
-  for (auto const& vb : vertexBuffers)
-  {
-      glDeleteBuffers(1, &vb.vertexBuffer);
-      glDeleteVertexArrays(1, &vb.vertexArray);
+  for (auto const& vb : vertexBuffers) {
+    glDeleteBuffers(1, &vb.vertexBuffer);
+    glDeleteVertexArrays(1, &vb.vertexArray);
   }
 
 }
@@ -659,7 +677,6 @@ void OpenGl41Renderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
   List<GLuint> currentTextures;
   List<Vec2U> currentTextureSizes;
   size_t currentVertexCount = 0;
-
 
   auto finishCurrentBuffer = [&]() {
     if (currentVertexCount > 0) {
@@ -689,14 +706,39 @@ void OpenGl41Renderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
         glEnableVertexAttribArray(attributeLocations.texIndex);
         glEnableVertexAttribArray(attributeLocations.color);
 
-        glVertexAttribPointer(attributeLocations.position, 2, GL_FLOAT, GL_FALSE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, screenCoordinate));
-        glVertexAttribPointer(attributeLocations.texCoord, 2, GL_FLOAT, GL_FALSE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, textureCoordinate));
-        glVertexAttribPointer(attributeLocations.texIndex, 1, GL_FLOAT, GL_FALSE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, textureIndex));
-        glVertexAttribPointer(attributeLocations.color, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, color));
+        glVertexAttribPointer(attributeLocations.position,
+                              2,
+                              GL_FLOAT,
+                              GL_FALSE,
+                              sizeof(GlRenderVertex),
+                              (GLvoid*)offsetof(GlRenderVertex, screenCoordinate));
+        glVertexAttribPointer(attributeLocations.texCoord,
+                              2,
+                              GL_FLOAT,
+                              GL_FALSE,
+                              sizeof(GlRenderVertex),
+                              (GLvoid*)offsetof(GlRenderVertex, textureCoordinate));
+        glVertexAttribPointer(attributeLocations.texIndex,
+                              1,
+                              GL_FLOAT,
+                              GL_FALSE,
+                              sizeof(GlRenderVertex),
+                              (GLvoid*)offsetof(GlRenderVertex, textureIndex));
+        glVertexAttribPointer(attributeLocations.color,
+                              4,
+                              GL_UNSIGNED_BYTE,
+                              GL_TRUE,
+                              sizeof(GlRenderVertex),
+                              (GLvoid*)offsetof(GlRenderVertex, color));
 
         if (attributeLocations.param1 != -1) {
           glEnableVertexAttribArray(attributeLocations.param1);
-          glVertexAttribPointer(attributeLocations.param1, 1, GL_FLOAT, GL_FALSE, sizeof(GlRenderVertex), (GLvoid*)offsetof(GlRenderVertex, param1));
+          glVertexAttribPointer(attributeLocations.param1,
+                                1,
+                                GL_FLOAT,
+                                GL_FALSE,
+                                sizeof(GlRenderVertex),
+                                (GLvoid*)offsetof(GlRenderVertex, param1));
         }
 
         glBufferData(GL_ARRAY_BUFFER, accumulationBuffer.size(), accumulationBuffer.ptr(), GL_STREAM_DRAW);
@@ -737,7 +779,7 @@ void OpenGl41Renderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
   };
 
   auto appendBufferVertex = [&](RenderVertex const& v, float textureIndex, Vec2F textureCoordinateOffset) {
-    GlRenderVertex glv {
+    GlRenderVertex glv{
       v.screenCoordinate,
       v.textureCoordinate + textureCoordinateOffset,
       textureIndex,
@@ -785,10 +827,9 @@ void OpenGl41Renderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
   vertexBuffers.reserve(primitives.size() * 6);
   finishCurrentBuffer();
 
-  for (auto const& vb : oldVertexBuffers)
-  {
-      glDeleteBuffers(1, &vb.vertexBuffer);
-      glDeleteVertexArrays(1, &vb.vertexArray);
+  for (auto const& vb : oldVertexBuffers) {
+    glDeleteBuffers(1, &vb.vertexBuffer);
+    glDeleteVertexArrays(1, &vb.vertexArray);
   }
 }
 
@@ -847,7 +888,7 @@ void OpenGl41Renderer::flushImmediatePrimitives() {
 }
 
 auto OpenGl41Renderer::createGlTexture(Image const& image, TextureAddressing addressing, TextureFiltering filtering)
-    -> RefPtr<GlLoneTexture> {
+-> RefPtr<GlLoneTexture> {
   auto glLoneTexture = make_ref<GlLoneTexture>();
   glLoneTexture->textureFiltering = filtering;
   glLoneTexture->textureAddressing = addressing;
@@ -874,7 +915,6 @@ auto OpenGl41Renderer::createGlTexture(Image const& image, TextureAddressing add
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   }
-
 
   if (!image.empty())
     uploadTextureImage(image.pixelFormat(), image.size(), image.data());
@@ -919,8 +959,8 @@ void OpenGl41Renderer::setupGlUniforms(Effect& effect) {
   m_attributeLocations.position = effect.getAttribute("vertexPosition");
   m_attributeLocations.texCoord = effect.getAttribute("vertexTextureCoordinate");
   m_attributeLocations.texIndex = effect.getAttribute("vertexTextureIndex");
-  m_attributeLocations.color= effect.getAttribute("vertexColor");
-  m_attributeLocations.param1= effect.getAttribute("vertexParam1");
+  m_attributeLocations.color = effect.getAttribute("vertexColor");
+  m_attributeLocations.param1 = effect.getAttribute("vertexParam1");
 
   m_textureUniforms.clear();
   m_textureSizeUniforms.clear();
@@ -987,6 +1027,5 @@ GLuint OpenGl41Renderer::Effect::getUniform(String const& name) {
   }
   return find->second;
 }
-
 
 }

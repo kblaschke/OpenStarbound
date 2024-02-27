@@ -17,6 +17,8 @@ SET(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/../cmake)
 SET(CMAKE_CONFIGURATION_TYPES Debug RelWithAsserts RelWithDebInfo Release)
 SET(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "")
 SET(CMAKE_EXE_LINKER_FLAGS_RELWITHASSERTS "" CACHE STRING "" FORCE)
+SET(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 # Update the docstring on CMAKE_BUILD_TYPE to show what options we actually
 # allow
 # SET (CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE STRING "Choose the type of build, options are: Debug RelWithAsserts RelWithDebInfo Release" FORCE)

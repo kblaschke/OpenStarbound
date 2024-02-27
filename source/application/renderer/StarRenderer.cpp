@@ -2,7 +2,11 @@
 
 namespace Star {
 
-RenderQuad Renderer::renderTexturedRect(TexturePtr texture, Vec2F minPosition, float textureScale, Vec4B color, float param1) {
+RenderQuad Renderer::renderTexturedRect(TexturePtr texture,
+                                        Vec2F minPosition,
+                                        float textureScale,
+                                        Vec4B color,
+                                        float param1) {
   return {std::move(texture), minPosition, textureScale, color, param1};
 }
 

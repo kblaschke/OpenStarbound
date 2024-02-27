@@ -15,13 +15,21 @@ STAR_EXCEPTION(RendererException, StarException);
 STAR_CLASS(Renderer);
 
 using RenderEffectParameter = Variant<bool, int, float, Vec2F, Vec3F, Vec4F>;
+using RendererCreateFunction = RendererPtr(*)();
+using RendererDestroyFunction = void(*)(RendererPtr&);
 
 class Renderer {
 public:
   virtual ~Renderer() = default;
 
+  virtual void initialize() = 0;
+
   virtual String rendererId() const = 0;
   virtual Vec2U screenSize() const = 0;
+  virtual void setScreenSize(Vec2U screenSize) = 0;
+
+  virtual void startFrame() {};
+  virtual void finishFrame() {};
 
   virtual void loadConfig(Json const& config) = 0;
 
@@ -55,8 +63,15 @@ public:
 
   virtual void flush() = 0;
 
-  static RenderQuad renderTexturedRect(TexturePtr texture, Vec2F minScreen, float textureScale = 1.0f, Vec4B color = Vec4B::filled(255), float param1 = 0.0f);
-  static RenderQuad renderTexturedRect(TexturePtr texture, RectF const& screenCoords, Vec4B color = Vec4B::filled(255), float param1 = 0.0f);
+  static RenderQuad renderTexturedRect(TexturePtr texture,
+                                       Vec2F minScreen,
+                                       float textureScale = 1.0f,
+                                       Vec4B color = Vec4B::filled(255),
+                                       float param1 = 0.0f);
+  static RenderQuad renderTexturedRect(TexturePtr texture,
+                                       RectF const& screenCoords,
+                                       Vec4B color = Vec4B::filled(255),
+                                       float param1 = 0.0f);
   static RenderQuad renderFlatRect(RectF const& rect, Vec4B color, float param1 = 0.0f);
   static RenderPoly renderFlatPoly(PolyF const& poly, Vec4B color, float param1 = 0.0f);
 

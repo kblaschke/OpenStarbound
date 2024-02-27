@@ -12,9 +12,9 @@ STAR_CLASS(TextureGroup);
 // but is not guaranteed to be supported by all systems.
 // Where Large sized textures are not supported, a Medium one is used
 enum class TextureGroupSize {
-    Small,
-    Medium,
-    Large
+  Small,
+  Medium,
+  Large
 };
 
 // Textures may be created individually, or in a texture group.  Textures in
@@ -22,13 +22,12 @@ enum class TextureGroupSize {
 // use less texture memory when many small textures are in a common group.
 // Texture groups must all have the same texture parameters, and will always
 // use clamped texture addressing.
-class TextureGroup
-{
+class TextureGroup {
 public:
-    virtual ~TextureGroup() = default;
+  virtual ~TextureGroup() = default;
 
-    virtual TextureFiltering filtering() const = 0;
-    virtual TexturePtr create(Image const& texture) = 0;
+  virtual TextureFiltering filtering() const = 0;
+  virtual TexturePtr create(Image const& texture) = 0;
 };
 
 }

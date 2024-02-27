@@ -27,5 +27,8 @@ void Application::getAudioData(int16_t* samples, size_t sampleCount) {
     samples[i] = 0;
 }
 
-void Application::shutdown() {}
+void Application::shutdown() {
+  m_renderer.reset();
+}
+
 }
