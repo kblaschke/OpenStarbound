@@ -1,31 +1,25 @@
 #pragma once
 
 #include "StarTextureAtlas.hpp"
-#include "renderer/StarRenderer.hpp"
+#include "StarRenderer.hpp"
 
 #include "GL/glew.h"
 
 namespace Star {
 
-STAR_CLASS(OpenGl41Renderer);
+STAR_CLASS(VulkanRenderer);
 
 constexpr size_t FrameBufferCount = 1;
 
 // OpenGL 4.1 implementation of Renderer.  OpenGL context must be created and
 // active during construction, destruction, and all method calls.
-class OpenGl41Renderer : public Renderer {
+class VulkanRenderer : public Renderer {
 public:
-  OpenGl41Renderer();
-  ~OpenGl41Renderer();
-
-  void initialize() override;
+  VulkanRenderer();
+  ~VulkanRenderer();
 
   String rendererId() const override;
   Vec2U screenSize() const override;
-  void setScreenSize(Vec2U screenSize) override;
-
-  void startFrame() override;
-  void finishFrame() override;
 
   void loadConfig(Json const& config) override;
   void loadEffectConfig(String const& name, Json const& effectConfig, StringMap<String> const& shaders) override;
@@ -48,6 +42,11 @@ public:
   void renderBuffer(RenderBufferPtr const& renderBuffer, Mat3F const& transformation) override;
 
   void flush() override;
+
+  void setScreenSize(Vec2U screenSize);
+
+  void startFrame();
+  void finishFrame();
 
 private:
   struct GlTextureAtlasSet : public TextureAtlasSet<GLuint> {
@@ -214,11 +213,9 @@ private:
 
   void setupGlUniforms(Effect& effect);
 
-  RefPtr<OpenGl41Renderer::GlFrameBuffer> getGlFrameBuffer(String const& id);
-  void blitGlFrameBuffer(RefPtr<OpenGl41Renderer::GlFrameBuffer> const& frameBuffer);
-  void switchGlFrameBuffer(RefPtr<OpenGl41Renderer::GlFrameBuffer> const& frameBuffer);
-
-  bool m_initialized{false};
+  RefPtr<VulkanRenderer::GlFrameBuffer> getGlFrameBuffer(String const& id);
+  void blitGlFrameBuffer(RefPtr<VulkanRenderer::GlFrameBuffer> const& frameBuffer);
+  void switchGlFrameBuffer(RefPtr<VulkanRenderer::GlFrameBuffer> const& frameBuffer);
 
   Vec2U m_screenSize;
 
@@ -232,7 +229,7 @@ private:
   GLint m_vertexTransformUniform = -1;
 
   StringMap<Effect> m_effects;
-  Effect* m_currentEffect{};
+  Effect* m_currentEffect;
 
   StringMap<RefPtr<GlFrameBuffer>> m_frameBuffers;
   RefPtr<GlFrameBuffer> m_currentFrameBuffer;

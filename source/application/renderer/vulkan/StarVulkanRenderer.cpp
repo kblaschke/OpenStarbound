@@ -1,0 +1,1024 @@
+#include "StarVulkanRenderer.hpp"
+#include "StarJsonExtra.hpp"
+#include "StarCasting.hpp"
+#include "StarLogging.hpp"
+
+namespace Star {
+
+size_t const MultiTextureCount = 4;
+
+char const* DefaultVertexShader = R"SHADER(
+#version 110
+
+uniform vec2 textureSize0;
+uniform vec2 textureSize1;
+uniform vec2 textureSize2;
+uniform vec2 textureSize3;
+uniform vec2 screenSize;
+uniform mat3 vertexTransform;
+
+attribute vec2 vertexPosition;
+attribute vec2 vertexTextureCoordinate;
+attribute float vertexTextureIndex;
+attribute vec4 vertexColor;
+attribute float vertexParam1;
+
+varying vec2 fragmentTextureCoordinate;
+varying float fragmentTextureIndex;
+varying vec4 fragmentColor;
+
+void main() {
+  vec2 screenPosition = (vertexTransform * vec3(vertexPosition, 1.0)).xy;
+  gl_Position = vec4(screenPosition / screenSize * 2.0 - 1.0, 0.0, 1.0);
+  if (vertexTextureIndex > 2.9) {
+    fragmentTextureCoordinate = vertexTextureCoordinate / textureSize3;
+  } else if (vertexTextureIndex > 1.9) {
+    fragmentTextureCoordinate = vertexTextureCoordinate / textureSize2;
+  } else if (vertexTextureIndex > 0.9) {
+    fragmentTextureCoordinate = vertexTextureCoordinate / textureSize1;
+  } else {
+    fragmentTextureCoordinate = vertexTextureCoordinate / textureSize0;
+  }
+  fragmentTextureIndex = vertexTextureIndex;
+  fragmentColor = vertexColor;
+}
+)SHADER";
+
+char const* DefaultFragmentShader = R"SHADER(
+#version 110
+
+uniform sampler2D texture0;
+uniform sampler2D texture1;
+uniform sampler2D texture2;
+uniform sampler2D texture3;
+
+varying vec2 fragmentTextureCoordinate;
+varying float fragmentTextureIndex;
+varying vec4 fragmentColor;
+
+void main() {
+  if (fragmentTextureIndex > 2.9) {
+    gl_FragColor = texture2D(texture3, fragmentTextureCoordinate) * fragmentColor;
+  } else if (fragmentTextureIndex > 1.9) {
+    gl_FragColor = texture2D(texture2, fragmentTextureCoordinate) * fragmentColor;
+  } else if (fragmentTextureIndex > 0.9) {
+    gl_FragColor = texture2D(texture1, fragmentTextureCoordinate) * fragmentColor;
+  } else {
+    gl_FragColor = texture2D(texture0, fragmentTextureCoordinate) * fragmentColor;
+  }
+}
+)SHADER";
+
+VulkanRenderer::VulkanRenderer() {
+  if (glewInit() != GLEW_OK)
+    throw RendererException("Could not initialize GLEW");
+
+  if (!GLEW_VERSION_4_1)
+    throw RendererException("OpenGL 4.1 not available!");
+
+  Logger::info("OpenGL version: '{}' vendor: '{}' renderer: '{}' shader: '{}'",
+               (const char*)glGetString(GL_VERSION),
+               (const char*)glGetString(GL_VENDOR),
+               (const char*)glGetString(GL_RENDERER),
+               (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));
+
+  glClearColor(0.0, 0.0, 0.0, 1.0);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glDisable(GL_DEPTH_TEST);
+
+  m_whiteTexture = createGlTexture(Image::filled({1, 1}, Vec4B(255, 255, 255, 255), PixelFormat::RGBA32),
+                                   TextureAddressing::Clamp,
+                                   TextureFiltering::Nearest);
+  m_immediateRenderBuffer = createGlRenderBuffer();
+
+  loadEffectConfig("internal", JsonObject(), {{"vertex", DefaultVertexShader}, {"fragment", DefaultFragmentShader}});
+
+  m_limitTextureGroupSize = false;
+  m_useMultiTexturing = true;
+
+  logGlErrorSummary("OpenGL errors during renderer initialization");
+}
+
+VulkanRenderer::~VulkanRenderer() {
+  for (auto& effect : m_effects)
+    glDeleteProgram(effect.second.program);
+
+  m_frameBuffers.clear();
+  logGlErrorSummary("OpenGL errors during shutdown");
+}
+
+String VulkanRenderer::rendererId() const {
+  return "OpenGL41";
+}
+
+Vec2U VulkanRenderer::screenSize() const {
+  return m_screenSize;
+}
+
+VulkanRenderer::GlFrameBuffer::GlFrameBuffer(Json const& fbConfig) : config(fbConfig) {
+  texture = createGlTexture(Image(), TextureAddressing::Clamp, TextureFiltering::Nearest);
+  glBindTexture(GL_TEXTURE_2D, texture->glTextureId());
+
+  Vec2U size = jsonToVec2U(config.getArray("size", {256, 256}));
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, size[0], size[1], 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+
+  glGenFramebuffers(1, &id);
+  if (!id)
+    throw RendererException("Failed to create OpenGL framebuffer");
+
+  glBindFramebuffer(GL_FRAMEBUFFER, id);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture->glTextureId(), 0);
+
+  auto framebufferStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+  if (framebufferStatus != GL_FRAMEBUFFER_COMPLETE)
+    throw RendererException("OpenGL framebuffer is not complete!");
+}
+
+VulkanRenderer::GlFrameBuffer::~GlFrameBuffer() {
+  glDeleteFramebuffers(1, &id);
+  texture.reset();
+}
+
+void VulkanRenderer::loadConfig(Json const& config) {
+  m_frameBuffers.clear();
+
+  for (auto& pair : config.getObject("frameBuffers", {}))
+    m_frameBuffers[pair.first] = make_ref<GlFrameBuffer>(pair.second);
+}
+
+void VulkanRenderer::loadEffectConfig(String const& name,
+                                        Json const& effectConfig,
+                                        StringMap<String> const& shaders) {
+  if (m_effects.contains(name)) {
+    Logger::warn("OpenGL effect {} already exists", name);
+    switchEffectConfig(name);
+    return;
+  }
+
+  GLint status = 0;
+  char logBuffer[1024];
+
+  auto compileShader = [&](GLenum type, String const& name) -> GLuint {
+    GLuint shader = glCreateShader(type);
+    auto* source = shaders.ptr(name);
+    if (!source)
+      return 0;
+    char const* sourcePtr = source->utf8Ptr();
+    glShaderSource(shader, 1, &sourcePtr, NULL);
+    glCompileShader(shader);
+
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
+    if (!status) {
+      glGetShaderInfoLog(shader, sizeof(logBuffer), NULL, logBuffer);
+      throw RendererException(strf("Failed to compile {} shader: {}\n", name, logBuffer));
+    }
+
+    return shader;
+  };
+
+  GLuint vertexShader = compileShader(GL_VERTEX_SHADER, "vertex");
+  GLuint fragmentShader = compileShader(GL_FRAGMENT_SHADER, "fragment");
+
+  GLuint program = glCreateProgram();
+
+  if (vertexShader)
+    glAttachShader(program, vertexShader);
+  if (fragmentShader)
+    glAttachShader(program, fragmentShader);
+  glLinkProgram(program);
+
+  if (vertexShader)
+    glDeleteShader(vertexShader);
+  if (fragmentShader)
+    glDeleteShader(fragmentShader);
+
+  glGetProgramiv(program, GL_LINK_STATUS, &status);
+  if (!status) {
+    glGetProgramInfoLog(program, sizeof(logBuffer), NULL, logBuffer);
+    glDeleteProgram(program);
+    throw RendererException(strf("Failed to link program: {}\n", logBuffer));
+  }
+
+  glUseProgram(m_program = program);
+
+  auto& effect = m_effects.emplace(name, Effect()).first->second;
+  effect.program = m_program;
+  effect.config = effectConfig;
+  m_currentEffect = &effect;
+  setupGlUniforms(effect);
+
+  for (auto const& p : effectConfig.getObject("effectParameters", {})) {
+    EffectParameter effectParameter;
+
+    effectParameter.parameterUniform = glGetUniformLocation(m_program, p.second.getString("uniform").utf8Ptr());
+    if (effectParameter.parameterUniform == -1) {
+      Logger::warn("OpenGl41 effect parameter '{}' has no associated uniform, skipping", p.first);
+    } else {
+      String type = p.second.getString("type");
+      if (type == "bool") {
+        effectParameter.parameterType = RenderEffectParameter::typeIndexOf<bool>();
+      } else if (type == "int") {
+        effectParameter.parameterType = RenderEffectParameter::typeIndexOf<int>();
+      } else if (type == "float") {
+        effectParameter.parameterType = RenderEffectParameter::typeIndexOf<float>();
+      } else if (type == "vec2") {
+        effectParameter.parameterType = RenderEffectParameter::typeIndexOf<Vec2F>();
+      } else if (type == "vec3") {
+        effectParameter.parameterType = RenderEffectParameter::typeIndexOf<Vec3F>();
+      } else if (type == "vec4") {
+        effectParameter.parameterType = RenderEffectParameter::typeIndexOf<Vec4F>();
+      } else {
+        throw RendererException::format("Unrecognized effect parameter type '{}'", type);
+      }
+
+      effect.parameters[p.first] = effectParameter;
+
+      if (Json def = p.second.get("default", {})) {
+        if (type == "bool") {
+          setEffectParameter(p.first, def.toBool());
+        } else if (type == "int") {
+          setEffectParameter(p.first, (int)def.toInt());
+        } else if (type == "float") {
+          setEffectParameter(p.first, def.toFloat());
+        } else if (type == "vec2") {
+          setEffectParameter(p.first, jsonToVec2F(def));
+        } else if (type == "vec3") {
+          setEffectParameter(p.first, jsonToVec3F(def));
+        } else if (type == "vec4") {
+          setEffectParameter(p.first, jsonToVec4F(def));
+        }
+      }
+    }
+  }
+
+  // Assign each texture parameter a texture unit starting with MultiTextureCount, the first
+  // few texture units are used by the primary textures being drawn.  Currently,
+  // maximum texture units are not checked.
+  unsigned parameterTextureUnit = MultiTextureCount;
+
+  for (auto const& p : effectConfig.getObject("effectTextures", {})) {
+    EffectTexture effectTexture;
+    effectTexture.textureUniform = glGetUniformLocation(m_program, p.second.getString("textureUniform").utf8Ptr());
+    if (effectTexture.textureUniform == -1) {
+      Logger::warn("OpenGl41 effect parameter '{}' has no associated uniform, skipping", p.first);
+    } else {
+      effectTexture.textureUnit = parameterTextureUnit++;
+      glUniform1i(effectTexture.textureUniform, effectTexture.textureUnit);
+
+      effectTexture.textureAddressing =
+        TextureAddressingNames.getLeft(p.second.getString("textureAddressing", "clamp"));
+      effectTexture.textureFiltering = TextureFilteringNames.getLeft(p.second.getString("textureFiltering", "nearest"));
+      if (auto tsu = p.second.optString("textureSizeUniform")) {
+        effectTexture.textureSizeUniform = glGetUniformLocation(m_program, tsu->utf8Ptr());
+        if (effectTexture.textureSizeUniform == -1)
+          Logger::warn("OpenGl41 effect parameter '{}' has textureSizeUniform '{}' with no associated uniform",
+                       p.first,
+                       *tsu);
+      }
+
+      effect.textures[p.first] = effectTexture;
+    }
+  }
+
+  if (DebugEnabled)
+    logGlErrorSummary("OpenGL errors setting effect config");
+}
+
+void VulkanRenderer::setEffectParameter(String const& parameterName, RenderEffectParameter const& value) {
+  auto ptr = m_currentEffect->parameters.ptr(parameterName);
+  if (!ptr || (ptr->parameterValue && *ptr->parameterValue == value))
+    return;
+
+  if (ptr->parameterType != value.typeIndex())
+    throw RendererException::format("VulkanRenderer::setEffectParameter '{}' parameter type mismatch", parameterName);
+
+  flushImmediatePrimitives();
+
+  if (auto v = value.ptr<bool>())
+    glUniform1i(ptr->parameterUniform, *v);
+  else if (auto v = value.ptr<int>())
+    glUniform1i(ptr->parameterUniform, *v);
+  else if (auto v = value.ptr<float>())
+    glUniform1f(ptr->parameterUniform, *v);
+  else if (auto v = value.ptr<Vec2F>())
+    glUniform2f(ptr->parameterUniform, (*v)[0], (*v)[1]);
+  else if (auto v = value.ptr<Vec3F>())
+    glUniform3f(ptr->parameterUniform, (*v)[0], (*v)[1], (*v)[2]);
+  else if (auto v = value.ptr<Vec4F>())
+    glUniform4f(ptr->parameterUniform, (*v)[0], (*v)[1], (*v)[2], (*v)[3]);
+
+  ptr->parameterValue = value;
+}
+
+void VulkanRenderer::setEffectTexture(String const& textureName, Image const& image) {
+  auto ptr = m_currentEffect->textures.ptr(textureName);
+  if (!ptr)
+    return;
+
+  flushImmediatePrimitives();
+
+  if (!ptr->textureValue || ptr->textureValue->textureId == 0) {
+    ptr->textureValue = createGlTexture(image, ptr->textureAddressing, ptr->textureFiltering);
+  } else {
+    glBindTexture(GL_TEXTURE_2D, ptr->textureValue->textureId);
+    ptr->textureValue->textureSize = image.size();
+    uploadTextureImage(image.pixelFormat(), image.size(), image.data());
+  }
+
+  if (ptr->textureSizeUniform != -1) {
+    auto textureSize = ptr->textureValue->glTextureSize();
+    glUniform2f(ptr->textureSizeUniform, textureSize[0], textureSize[1]);
+  }
+}
+
+bool VulkanRenderer::switchEffectConfig(String const& name) {
+  flushImmediatePrimitives();
+  auto find = m_effects.find(name);
+  if (find == m_effects.end())
+    return false;
+
+  Effect& effect = find->second;
+  if (m_currentEffect == &effect)
+    return true;
+
+  if (auto blitFrameBufferId = effect.config.optString("blitFrameBuffer"))
+    blitGlFrameBuffer(getGlFrameBuffer(*blitFrameBufferId));
+
+  if (auto frameBufferId = effect.config.optString("frameBuffer"))
+    switchGlFrameBuffer(getGlFrameBuffer(*frameBufferId));
+  else {
+    m_currentFrameBuffer.reset();
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  }
+
+  glUseProgram(m_program = effect.program);
+  setupGlUniforms(effect);
+  m_currentEffect = &effect;
+
+  return true;
+}
+
+void VulkanRenderer::setScissorRect(Maybe<RectI> const& scissorRect) {
+  if (scissorRect == m_scissorRect)
+    return;
+
+  flushImmediatePrimitives();
+
+  m_scissorRect = scissorRect;
+  if (m_scissorRect) {
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(m_scissorRect->xMin(), m_scissorRect->yMin(), m_scissorRect->width(), m_scissorRect->height());
+  } else {
+    glDisable(GL_SCISSOR_TEST);
+  }
+}
+
+TexturePtr VulkanRenderer::createTexture(Image const& texture,
+                                           TextureAddressing addressing,
+                                           TextureFiltering filtering) {
+  return createGlTexture(texture, addressing, filtering);
+}
+
+void VulkanRenderer::setSizeLimitEnabled(bool enabled) {
+  m_limitTextureGroupSize = enabled;
+}
+
+void VulkanRenderer::setMultiTexturingEnabled(bool enabled) {
+  m_useMultiTexturing = enabled;
+}
+
+TextureGroupPtr VulkanRenderer::createTextureGroup(TextureGroupSize textureSize, TextureFiltering filtering) {
+  int maxTextureSize;
+  glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+
+  // Large texture sizes are not always supported
+  if (textureSize == TextureGroupSize::Large && (m_limitTextureGroupSize || maxTextureSize < 4096))
+    textureSize = TextureGroupSize::Medium;
+
+  unsigned atlasNumCells;
+  if (textureSize == TextureGroupSize::Large)
+    atlasNumCells = 256;
+  else if (textureSize == TextureGroupSize::Medium)
+    atlasNumCells = 128;
+  else // TextureGroupSize::Small
+    atlasNumCells = 64;
+
+  Logger::info("detected supported OpenGL texture size {}, using atlasNumCells {}", maxTextureSize, atlasNumCells);
+
+  auto glTextureGroup = make_shared<GlTextureGroup>(atlasNumCells);
+  glTextureGroup->textureAtlasSet.textureFiltering = filtering;
+  m_liveTextureGroups.append(glTextureGroup);
+  return glTextureGroup;
+}
+
+RenderBufferPtr VulkanRenderer::createRenderBuffer() {
+  return createGlRenderBuffer();
+}
+
+List<RenderPrimitive>& VulkanRenderer::immediatePrimitives() {
+  return m_immediatePrimitives;
+}
+
+void VulkanRenderer::render(RenderPrimitive primitive) {
+  m_immediatePrimitives.append(std::move(primitive));
+}
+
+void VulkanRenderer::renderBuffer(RenderBufferPtr const& renderBuffer, Mat3F const& transformation) {
+  flushImmediatePrimitives();
+  renderGlBuffer(*convert<GlRenderBuffer>(renderBuffer.get()), transformation);
+}
+
+void VulkanRenderer::flush() {
+  flushImmediatePrimitives();
+}
+
+void VulkanRenderer::setScreenSize(Vec2U screenSize) {
+  m_screenSize = screenSize;
+  glViewport(0, 0, m_screenSize[0], m_screenSize[1]);
+  glUniform2f(m_screenSizeUniform, m_screenSize[0], m_screenSize[1]);
+
+  for (auto& frameBuffer : m_frameBuffers) {
+    glBindTexture(GL_TEXTURE_2D, frameBuffer.second->texture->glTextureId());
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, m_screenSize[0], m_screenSize[1], 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+  }
+}
+
+void VulkanRenderer::startFrame() {
+  if (m_scissorRect)
+    glDisable(GL_SCISSOR_TEST);
+
+  for (auto& frameBuffer : m_frameBuffers) {
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, frameBuffer.second->id);
+    glClear(GL_COLOR_BUFFER_BIT);
+    frameBuffer.second->blitted = false;
+  }
+
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+  glClear(GL_COLOR_BUFFER_BIT);
+
+  if (m_scissorRect)
+    glEnable(GL_SCISSOR_TEST);
+}
+
+void VulkanRenderer::finishFrame() {
+  flushImmediatePrimitives();
+  // Make sure that the immediate render buffer doesn't needlessly lock textures
+  // from being compressed.
+  List<RenderPrimitive> empty;
+  m_immediateRenderBuffer->set(empty);
+
+  filter(m_liveTextureGroups, [](auto const& p) {
+    unsigned const CompressionsPerFrame = 1;
+
+    if (!p.unique() || p->textureAtlasSet.totalTextures() > 0) {
+      p->textureAtlasSet.compressionPass(CompressionsPerFrame);
+      return true;
+    }
+
+    return false;
+  });
+
+  // Blit if another shader hasn't
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+  if (DebugEnabled)
+    logGlErrorSummary("OpenGL errors this frame");
+}
+
+VulkanRenderer::GlTextureAtlasSet::GlTextureAtlasSet(unsigned atlasNumCells)
+  : TextureAtlasSet(16, atlasNumCells) {}
+
+GLuint VulkanRenderer::GlTextureAtlasSet::createAtlasTexture(Vec2U const& size, PixelFormat pixelFormat) {
+  GLuint glTextureId;
+  glGenTextures(1, &glTextureId);
+  if (glTextureId == 0)
+    throw RendererException("Could not generate texture in VulkanRenderer::TextureGroup::createAtlasTexture()");
+
+  glBindTexture(GL_TEXTURE_2D, glTextureId);
+
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+  if (textureFiltering == TextureFiltering::Nearest) {
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  } else {
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  }
+
+  uploadTextureImage(pixelFormat, size, nullptr);
+  return glTextureId;
+}
+
+void VulkanRenderer::GlTextureAtlasSet::destroyAtlasTexture(GLuint const& glTexture) {
+  glDeleteTextures(1, &glTexture);
+}
+
+void VulkanRenderer::GlTextureAtlasSet::copyAtlasPixels(
+  GLuint const& glTexture, Vec2U const& bottomLeft, Image const& image) {
+  glBindTexture(GL_TEXTURE_2D, glTexture);
+
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  GLenum format;
+  auto pixelFormat = image.pixelFormat();
+  if (pixelFormat == PixelFormat::RGB24)
+    format = GL_RGB;
+  else if (pixelFormat == PixelFormat::RGBA32)
+    format = GL_RGBA;
+  else if (pixelFormat == PixelFormat::BGR24)
+    format = GL_BGR;
+  else if (pixelFormat == PixelFormat::BGRA32)
+    format = GL_BGRA;
+  else
+    throw RendererException("Unsupported texture format in VulkanRenderer::TextureGroup::copyAtlasPixels");
+
+  glTexSubImage2D(GL_TEXTURE_2D,
+                  0,
+                  bottomLeft[0],
+                  bottomLeft[1],
+                  image.width(),
+                  image.height(),
+                  format,
+                  GL_UNSIGNED_BYTE,
+                  image.data());
+}
+
+VulkanRenderer::GlTextureGroup::GlTextureGroup(unsigned atlasNumCells)
+  : textureAtlasSet(atlasNumCells) {}
+
+VulkanRenderer::GlTextureGroup::~GlTextureGroup() {
+  textureAtlasSet.reset();
+}
+
+TextureFiltering VulkanRenderer::GlTextureGroup::filtering() const {
+  return textureAtlasSet.textureFiltering;
+}
+
+TexturePtr VulkanRenderer::GlTextureGroup::create(Image const& texture) {
+  // If the image is empty, or would not fit in the texture atlas with border
+  // pixels, just create a regular texture
+  Vec2U atlasTextureSize = textureAtlasSet.atlasTextureSize();
+  if (texture.empty() || texture.width() + 2 > atlasTextureSize[0] || texture.height() + 2 > atlasTextureSize[1])
+    return createGlTexture(texture, TextureAddressing::Clamp, textureAtlasSet.textureFiltering);
+
+  auto glGroupedTexture = make_ref<GlGroupedTexture>();
+  glGroupedTexture->parentGroup = shared_from_this();
+  glGroupedTexture->parentAtlasTexture = textureAtlasSet.addTexture(texture);
+
+  return glGroupedTexture;
+}
+
+VulkanRenderer::GlGroupedTexture::~GlGroupedTexture() {
+  if (parentAtlasTexture)
+    parentGroup->textureAtlasSet.freeTexture(parentAtlasTexture);
+}
+
+Vec2U VulkanRenderer::GlGroupedTexture::size() const {
+  return parentAtlasTexture->imageSize();
+}
+
+TextureFiltering VulkanRenderer::GlGroupedTexture::filtering() const {
+  return parentGroup->filtering();
+}
+
+TextureAddressing VulkanRenderer::GlGroupedTexture::addressing() const {
+  return TextureAddressing::Clamp;
+}
+
+GLuint VulkanRenderer::GlGroupedTexture::glTextureId() const {
+  return parentAtlasTexture->atlasTexture();
+}
+
+Vec2U VulkanRenderer::GlGroupedTexture::glTextureSize() const {
+  return parentGroup->textureAtlasSet.atlasTextureSize();
+}
+
+Vec2U VulkanRenderer::GlGroupedTexture::glTextureCoordinateOffset() const {
+  return parentAtlasTexture->atlasTextureCoordinates().min();
+}
+
+void VulkanRenderer::GlGroupedTexture::incrementBufferUseCount() {
+  if (bufferUseCount == 0)
+    parentAtlasTexture->setLocked(true);
+  ++bufferUseCount;
+}
+
+void VulkanRenderer::GlGroupedTexture::decrementBufferUseCount() {
+  starAssert(bufferUseCount != 0);
+  if (bufferUseCount == 1)
+    parentAtlasTexture->setLocked(false);
+  --bufferUseCount;
+}
+
+VulkanRenderer::GlLoneTexture::~GlLoneTexture() {
+  if (textureId != 0)
+    glDeleteTextures(1, &textureId);
+}
+
+Vec2U VulkanRenderer::GlLoneTexture::size() const {
+  return textureSize;
+}
+
+TextureFiltering VulkanRenderer::GlLoneTexture::filtering() const {
+  return textureFiltering;
+}
+
+TextureAddressing VulkanRenderer::GlLoneTexture::addressing() const {
+  return textureAddressing;
+}
+
+GLuint VulkanRenderer::GlLoneTexture::glTextureId() const {
+  return textureId;
+}
+
+Vec2U VulkanRenderer::GlLoneTexture::glTextureSize() const {
+  return textureSize;
+}
+
+Vec2U VulkanRenderer::GlLoneTexture::glTextureCoordinateOffset() const {
+  return Vec2U();
+}
+
+VulkanRenderer::GlRenderBuffer::GlRenderBuffer(const GlVertexAttributeLocations& attributeLocations)
+  : attributeLocations(attributeLocations), useMultiTexturing(true) {
+}
+
+VulkanRenderer::GlRenderBuffer::~GlRenderBuffer() {
+  for (auto const& texture : usedTextures) {
+    if (auto gt = as<GlGroupedTexture>(texture.get()))
+      gt->decrementBufferUseCount();
+  }
+  for (auto const& vb : vertexBuffers) {
+    glDeleteBuffers(1, &vb.vertexBuffer);
+    glDeleteVertexArrays(1, &vb.vertexArray);
+  }
+
+}
+
+void VulkanRenderer::GlRenderBuffer::set(List<RenderPrimitive>& primitives) {
+  for (auto const& texture : usedTextures) {
+    if (auto gt = as<GlGroupedTexture>(texture.get()))
+      gt->decrementBufferUseCount();
+  }
+  usedTextures.clear();
+
+  auto oldVertexBuffers = take(vertexBuffers);
+
+  List<GLuint> currentTextures;
+  List<Vec2U> currentTextureSizes;
+  size_t currentVertexCount = 0;
+
+  auto finishCurrentBuffer = [&]() {
+    if (currentVertexCount > 0) {
+      GlVertexBuffer vb;
+      for (size_t i = 0; i < currentTextures.size(); ++i) {
+        vb.textures.append(GlVertexBufferTexture{currentTextures[i], currentTextureSizes[i]});
+      }
+      vb.vertexCount = currentVertexCount;
+      if (!oldVertexBuffers.empty()) {
+        auto oldVb = oldVertexBuffers.takeLast();
+        vb.vertexArray = oldVb.vertexArray;
+        vb.vertexBuffer = oldVb.vertexBuffer;
+        glBindVertexArray(vb.vertexArray);
+        glBindBuffer(GL_ARRAY_BUFFER, vb.vertexBuffer);
+        if (oldVb.vertexCount >= vb.vertexCount)
+          glBufferSubData(GL_ARRAY_BUFFER, 0, accumulationBuffer.size(), accumulationBuffer.ptr());
+        else
+          glBufferData(GL_ARRAY_BUFFER, accumulationBuffer.size(), accumulationBuffer.ptr(), GL_STREAM_DRAW);
+      } else {
+        glGenVertexArrays(1, &vb.vertexArray);
+        glGenBuffers(1, &vb.vertexBuffer);
+        glBindVertexArray(vb.vertexArray);
+        glBindBuffer(GL_ARRAY_BUFFER, vb.vertexBuffer);
+
+        glEnableVertexAttribArray(attributeLocations.position);
+        glEnableVertexAttribArray(attributeLocations.texCoord);
+        glEnableVertexAttribArray(attributeLocations.texIndex);
+        glEnableVertexAttribArray(attributeLocations.color);
+
+        glVertexAttribPointer(attributeLocations.position,
+                              2,
+                              GL_FLOAT,
+                              GL_FALSE,
+                              sizeof(GlRenderVertex),
+                              (GLvoid*)offsetof(GlRenderVertex, screenCoordinate));
+        glVertexAttribPointer(attributeLocations.texCoord,
+                              2,
+                              GL_FLOAT,
+                              GL_FALSE,
+                              sizeof(GlRenderVertex),
+                              (GLvoid*)offsetof(GlRenderVertex, textureCoordinate));
+        glVertexAttribPointer(attributeLocations.texIndex,
+                              1,
+                              GL_FLOAT,
+                              GL_FALSE,
+                              sizeof(GlRenderVertex),
+                              (GLvoid*)offsetof(GlRenderVertex, textureIndex));
+        glVertexAttribPointer(attributeLocations.color,
+                              4,
+                              GL_UNSIGNED_BYTE,
+                              GL_TRUE,
+                              sizeof(GlRenderVertex),
+                              (GLvoid*)offsetof(GlRenderVertex, color));
+
+        if (attributeLocations.param1 != -1) {
+          glEnableVertexAttribArray(attributeLocations.param1);
+          glVertexAttribPointer(attributeLocations.param1,
+                                1,
+                                GL_FLOAT,
+                                GL_FALSE,
+                                sizeof(GlRenderVertex),
+                                (GLvoid*)offsetof(GlRenderVertex, param1));
+        }
+
+        glBufferData(GL_ARRAY_BUFFER, accumulationBuffer.size(), accumulationBuffer.ptr(), GL_STREAM_DRAW);
+      }
+
+      vertexBuffers.emplace_back(std::move(vb));
+
+      currentTextures.clear();
+      currentTextureSizes.clear();
+      accumulationBuffer.clear();
+      currentVertexCount = 0;
+    }
+  };
+
+  auto textureCount = useMultiTexturing ? MultiTextureCount : 1;
+  auto addCurrentTexture = [&](TexturePtr texture) -> pair<uint8_t, Vec2F> {
+    if (!texture)
+      texture = whiteTexture;
+
+    auto glTexture = as<GlTexture>(texture.get());
+    GLuint glTextureId = glTexture->glTextureId();
+
+    auto textureIndex = currentTextures.indexOf(glTextureId);
+    if (textureIndex == NPos) {
+      if (currentTextures.size() >= textureCount)
+        finishCurrentBuffer();
+
+      textureIndex = currentTextures.size();
+      currentTextures.append(glTextureId);
+      currentTextureSizes.append(glTexture->glTextureSize());
+    }
+
+    if (auto gt = as<GlGroupedTexture>(texture.get()))
+      gt->incrementBufferUseCount();
+    usedTextures.add(std::move(texture));
+
+    return {float(textureIndex), Vec2F(glTexture->glTextureCoordinateOffset())};
+  };
+
+  auto appendBufferVertex = [&](RenderVertex const& v, float textureIndex, Vec2F textureCoordinateOffset) {
+    GlRenderVertex glv{
+      v.screenCoordinate,
+      v.textureCoordinate + textureCoordinateOffset,
+      textureIndex,
+      v.color,
+      v.param1
+    };
+    accumulationBuffer.append((char const*)&glv, sizeof(GlRenderVertex));
+    ++currentVertexCount;
+  };
+
+  float textureIndex = 0.0f;
+  Vec2F textureOffset = {};
+  for (auto& primitive : primitives) {
+    if (auto tri = primitive.ptr<RenderTriangle>()) {
+      tie(textureIndex, textureOffset) = addCurrentTexture(std::move(tri->texture));
+
+      appendBufferVertex(tri->a, textureIndex, textureOffset);
+      appendBufferVertex(tri->b, textureIndex, textureOffset);
+      appendBufferVertex(tri->c, textureIndex, textureOffset);
+
+    } else if (auto quad = primitive.ptr<RenderQuad>()) {
+      tie(textureIndex, textureOffset) = addCurrentTexture(std::move(quad->texture));
+
+      appendBufferVertex(quad->a, textureIndex, textureOffset);
+      appendBufferVertex(quad->b, textureIndex, textureOffset);
+      appendBufferVertex(quad->c, textureIndex, textureOffset);
+
+      appendBufferVertex(quad->a, textureIndex, textureOffset);
+      appendBufferVertex(quad->c, textureIndex, textureOffset);
+      appendBufferVertex(quad->d, textureIndex, textureOffset);
+
+    } else if (auto poly = primitive.ptr<RenderPoly>()) {
+      if (poly->vertexes.size() > 2) {
+        tie(textureIndex, textureOffset) = addCurrentTexture(std::move(poly->texture));
+
+        for (size_t i = 1; i < poly->vertexes.size() - 1; ++i) {
+          appendBufferVertex(poly->vertexes[0], textureIndex, textureOffset);
+          appendBufferVertex(poly->vertexes[i], textureIndex, textureOffset);
+          appendBufferVertex(poly->vertexes[i + 1], textureIndex, textureOffset);
+        }
+      }
+    }
+  }
+
+  vertexBuffers.reserve(primitives.size() * 6);
+  finishCurrentBuffer();
+
+  for (auto const& vb : oldVertexBuffers) {
+    glDeleteBuffers(1, &vb.vertexBuffer);
+    glDeleteVertexArrays(1, &vb.vertexArray);
+  }
+}
+
+bool VulkanRenderer::logGlErrorSummary(String prefix) {
+  if (GLenum error = glGetError()) {
+    Logger::error("{}: ", prefix);
+    do {
+      if (error == GL_INVALID_ENUM) {
+        Logger::error("GL_INVALID_ENUM");
+      } else if (error == GL_INVALID_VALUE) {
+        Logger::error("GL_INVALID_VALUE");
+      } else if (error == GL_INVALID_OPERATION) {
+        Logger::error("GL_INVALID_OPERATION");
+      } else if (error == GL_INVALID_FRAMEBUFFER_OPERATION) {
+        Logger::error("GL_INVALID_FRAMEBUFFER_OPERATION");
+      } else if (error == GL_OUT_OF_MEMORY) {
+        Logger::error("GL_OUT_OF_MEMORY");
+      } else if (error == GL_STACK_UNDERFLOW) {
+        Logger::error("GL_STACK_UNDERFLOW");
+      } else if (error == GL_STACK_OVERFLOW) {
+        Logger::error("GL_STACK_OVERFLOW");
+      } else {
+        Logger::error("<UNRECOGNIZED GL ERROR>");
+      }
+    } while (error = glGetError());
+    return true;
+  }
+  return false;
+}
+
+void VulkanRenderer::uploadTextureImage(PixelFormat pixelFormat, Vec2U size, uint8_t const* data) {
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+  GLenum format;
+  if (pixelFormat == PixelFormat::RGB24)
+    format = GL_RGB;
+  else if (pixelFormat == PixelFormat::RGBA32)
+    format = GL_RGBA;
+  else if (pixelFormat == PixelFormat::BGR24)
+    format = GL_BGR;
+  else if (pixelFormat == PixelFormat::BGRA32)
+    format = GL_BGRA;
+  else
+    throw RendererException("Unsupported texture format in VulkanRenderer::uploadTextureImage");
+
+  glTexImage2D(GL_TEXTURE_2D, 0, format, size[0], size[1], 0, format, GL_UNSIGNED_BYTE, data);
+}
+
+void VulkanRenderer::flushImmediatePrimitives() {
+  if (m_immediatePrimitives.empty())
+    return;
+
+  m_immediateRenderBuffer->set(m_immediatePrimitives);
+  m_immediatePrimitives.resize(0);
+  renderGlBuffer(*m_immediateRenderBuffer, Mat3F::identity());
+}
+
+auto VulkanRenderer::createGlTexture(Image const& image, TextureAddressing addressing, TextureFiltering filtering)
+-> RefPtr<GlLoneTexture> {
+  auto glLoneTexture = make_ref<GlLoneTexture>();
+  glLoneTexture->textureFiltering = filtering;
+  glLoneTexture->textureAddressing = addressing;
+  glLoneTexture->textureSize = image.size();
+
+  glGenTextures(1, &glLoneTexture->textureId);
+  if (glLoneTexture->textureId == 0)
+    throw RendererException("Could not generate texture in VulkanRenderer::createGlTexture");
+
+  glBindTexture(GL_TEXTURE_2D, glLoneTexture->textureId);
+
+  if (addressing == TextureAddressing::Clamp) {
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  } else {
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  }
+
+  if (filtering == TextureFiltering::Nearest) {
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  } else {
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  }
+
+  if (!image.empty())
+    uploadTextureImage(image.pixelFormat(), image.size(), image.data());
+
+  return glLoneTexture;
+}
+
+auto VulkanRenderer::createGlRenderBuffer() -> shared_ptr<GlRenderBuffer> {
+  auto glrb = make_shared<GlRenderBuffer>(m_attributeLocations);
+  glrb->whiteTexture = m_whiteTexture;
+  glrb->useMultiTexturing = m_useMultiTexturing;
+  return glrb;
+}
+
+void VulkanRenderer::renderGlBuffer(GlRenderBuffer const& renderBuffer, Mat3F const& transformation) {
+  for (auto const& vb : renderBuffer.vertexBuffers) {
+    glUniformMatrix3fv(m_vertexTransformUniform, 1, GL_TRUE, transformation.ptr());
+
+    for (size_t i = 0; i < vb.textures.size(); ++i) {
+      glUniform2f(m_textureSizeUniforms[i], vb.textures[i].size[0], vb.textures[i].size[1]);
+      glActiveTexture(GL_TEXTURE0 + i);
+      glBindTexture(GL_TEXTURE_2D, vb.textures[i].texture);
+    }
+
+    for (auto const& p : m_currentEffect->textures) {
+      if (p.second.textureValue) {
+        glActiveTexture(GL_TEXTURE0 + p.second.textureUnit);
+        glBindTexture(GL_TEXTURE_2D, p.second.textureValue->textureId);
+      }
+    }
+
+    glBindVertexArray(vb.vertexArray);
+    glBindBuffer(GL_ARRAY_BUFFER, vb.vertexBuffer);
+    glDrawArrays(GL_TRIANGLES, 0, vb.vertexCount);
+  }
+}
+
+//Assumes the passed effect program is currently in use.
+void VulkanRenderer::setupGlUniforms(Effect& effect) {
+  GLuint program = effect.program;
+
+  m_attributeLocations.position = effect.getAttribute("vertexPosition");
+  m_attributeLocations.texCoord = effect.getAttribute("vertexTextureCoordinate");
+  m_attributeLocations.texIndex = effect.getAttribute("vertexTextureIndex");
+  m_attributeLocations.color = effect.getAttribute("vertexColor");
+  m_attributeLocations.param1 = effect.getAttribute("vertexParam1");
+
+  m_textureUniforms.clear();
+  m_textureSizeUniforms.clear();
+  for (size_t i = 0; i < MultiTextureCount; ++i) {
+    m_textureUniforms.append(effect.getUniform(strf("texture{}", i).c_str()));
+    m_textureSizeUniforms.append(effect.getUniform(strf("textureSize{}", i).c_str()));
+  }
+  m_screenSizeUniform = effect.getUniform("screenSize");
+  m_vertexTransformUniform = effect.getUniform("vertexTransform");
+
+  for (size_t i = 0; i < MultiTextureCount; ++i)
+    glUniform1i(m_textureUniforms[i], i);
+
+  glUniform2f(m_screenSizeUniform, m_screenSize[0], m_screenSize[1]);
+}
+
+RefPtr<VulkanRenderer::GlFrameBuffer> VulkanRenderer::getGlFrameBuffer(String const& id) {
+  if (auto ptr = m_frameBuffers.ptr(id))
+    return *ptr;
+  else
+    throw RendererException::format("Frame buffer '{}' does not exist", id);
+}
+
+void VulkanRenderer::blitGlFrameBuffer(RefPtr<GlFrameBuffer> const& frameBuffer) {
+  if (frameBuffer->blitted)
+    return;
+
+  auto& size = m_screenSize;
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, frameBuffer->id);
+  glBlitFramebuffer(
+    0, 0, size[0], size[1],
+    0, 0, size[0], size[1],
+    GL_COLOR_BUFFER_BIT, GL_NEAREST
+  );
+
+  frameBuffer->blitted = true;
+}
+
+void VulkanRenderer::switchGlFrameBuffer(RefPtr<GlFrameBuffer> const& frameBuffer) {
+  if (m_currentFrameBuffer == frameBuffer)
+    return;
+
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, frameBuffer->id);
+  m_currentFrameBuffer = frameBuffer;
+}
+
+GLuint VulkanRenderer::Effect::getAttribute(String const& name) {
+  auto find = attributes.find(name);
+  if (find == attributes.end()) {
+    GLuint attrib = glGetAttribLocation(program, name.utf8Ptr());
+    attributes[name] = attrib;
+    return attrib;
+  }
+  return find->second;
+}
+
+GLuint VulkanRenderer::Effect::getUniform(String const& name) {
+  auto find = uniforms.find(name);
+  if (find == uniforms.end()) {
+    GLuint uniform = glGetUniformLocation(program, name.utf8Ptr());
+    uniforms[name] = uniform;
+    return uniform;
+  }
+  return find->second;
+}
+
+}
